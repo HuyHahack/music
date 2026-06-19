@@ -1,0 +1,17 @@
+{
+  "name": "carl-music-bot",
+  "version": "1.0.0",
+  "description": "High Performance Discord Music Bot with TikTok, SoundCloud, YouTube Support",
+  "main": "music_bot.js",
+  "scripts": {
+    "start": "node music_bot.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "@discordjs/voice": "^0.17.0",
+    "play-dl": "^1.9.7",
+    "ffmpeg-static": "^5.2.0",
+    "libsodium-wrappers": "^0.7.13",
+    "dotenv": "^16.4.5"
+  }
+}
