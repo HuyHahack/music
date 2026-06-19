@@ -7,9 +7,10 @@ require('dotenv/config');
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildVoiceStates // Bắt buộc phải có intent này để đọc trạng thái phòng thoại [1.1.5]
+    GatewayIntentBits.GuildVoiceStates // Bắt buộc phải có intent này để đọc trạng thái phòng thoại
   ]
 });
 
@@ -19,7 +20,6 @@ const queue = new Map(); // Lưu vết trạng thái: Key là guildId, Value là
 // Hàm phân tích và trích xuất link âm thanh trực tiếp cho TikTok và các trang web khác bằng yt-dlp
 async function getDirectAudioUrl(url) {
   try {
-    // Gọi lệnh yt-dlp hệ thống lấy luồng âm thanh trực tiếp (Direct URL)
     const { stdout } = await exec(`yt-dlp -f bestaudio -g "${url}"`);
     return stdout.trim().split('\n')[0];
   } catch (err) {
@@ -28,8 +28,24 @@ async function getDirectAudioUrl(url) {
   }
 }
 
-client.once('ready', () => {
-  console.log(`🎵 Bot phát nhạc đã sẵn sàng: ${client.user.tag}`);
+client.once('ready', async () => {
+  console.log(`\n🎵 Bot phát nhạc đã sẵn sàng: ${client.user.tag}`);
+
+  // TỰ ĐỘNG NẠP YOUTUBE COOKIE ĐỂ BYPASS LỖI CHẶN 429
+  if (process.env.YOUTUBE_COOKIE) {
+    try {
+      await play.setToken({
+        youtube: {
+          cookie: process.env.YOUTUBE_COOKIE.trim()
+        }
+      });
+      console.log('✅ Đã nạp thành công YouTube Cookie! Bỏ qua cơ chế chặn IP (429) của YouTube.');
+    } catch (err) {
+      console.error('❌ Lỗi khi nạp YouTube Cookie:', err.message);
+    }
+  } else {
+    console.log('⚠️ Cảnh báo: Chưa phát hiện biến môi trường YOUTUBE_COOKIE. Bot có thể bị lỗi chặn 429 trên Render.');
+  }
 });
 
 client.on('messageCreate', async (message) => {
@@ -62,13 +78,11 @@ client.on('messageCreate', async (message) => {
       // Kiểm tra nếu là một liên kết ngoài
       if (query.startsWith('http://') || query.startsWith('https://')) {
         if (query.includes('youtube.com') || query.includes('youtu.be') || query.includes('soundcloud.com') || query.includes('spotify.com')) {
-          // Xử lý nhanh bằng play-dl đối với YouTube, SoundCloud, Spotify
           const streamInfo = await play.stream(query);
           stream = streamInfo.stream;
           inputType = streamInfo.type;
           title = query;
         } else {
-          // Xử lý TikTok, Facebook, Twitch, Twitter... thông qua giải mã trực tiếp của yt-dlp
           streamUrl = await getDirectAudioUrl(query);
           if (!streamUrl) {
             return replyMsg.edit('❌ Định dạng liên kết ngoài này chưa được hỗ trợ hoặc không thể trích xuất âm thanh!');
@@ -76,7 +90,6 @@ client.on('messageCreate', async (message) => {
           title = `Liên kết ngoài (${new URL(query).hostname})`;
         }
       } else {
-        // Tìm kiếm từ khóa trên YouTube
         const yt_info = await play.search(query, { limit: 1 });
         if (yt_info.length === 0) return replyMsg.edit('❌ Không tìm thấy bài hát nào khớp với từ khóa!');
         const streamInfo = await play.stream(yt_info[0].url);
@@ -85,7 +98,6 @@ client.on('messageCreate', async (message) => {
         title = yt_info[0].title;
       }
 
-      // Khởi tạo phòng thoại
       const connection = joinVoiceChannel({
         channelId: voiceChannel.id,
         guildId: message.guild.id,
@@ -94,7 +106,6 @@ client.on('messageCreate', async (message) => {
 
       const player = createAudioPlayer();
       
-      // Tạo luồng âm thanh nạp vào tài nguyên của Bot
       let resource;
       if (stream) {
         resource = createAudioResource(stream, { inputType });
@@ -105,7 +116,6 @@ client.on('messageCreate', async (message) => {
       player.play(resource);
       connection.subscribe(player);
 
-      // Lưu trữ thông tin người yêu cầu (requesterId) và trạng thái kết nối
       queue.set(message.guild.id, {
         connection,
         player,
@@ -114,7 +124,6 @@ client.on('messageCreate', async (message) => {
         url: query
       });
 
-      // Tự động ngắt kết nối khi phát xong
       player.on(AudioPlayerStatus.Idle, () => {
         connection.destroy();
         queue.delete(message.guild.id);
@@ -144,7 +153,6 @@ client.on('messageCreate', async (message) => {
       return message.reply('❌ Bot hiện tại không có trong phòng thoại hoặc đang không phát nhạc!');
     }
 
-    // Kiểm tra quyền hạn nghiêm ngặt
     const requesterId = serverQueue ? serverQueue.requesterId : null;
     const isAdmin = message.member.permissions.has(PermissionFlagsBits.Administrator);
 
@@ -152,7 +160,6 @@ client.on('messageCreate', async (message) => {
       return message.reply(`❌ Chỉ có **người phát bài hát hiện tại** (<@${requesterId}>) hoặc **Quản trị viên** mới được quyền dừng nhạc!`);
     }
 
-    // Thực hiện dọn dẹp kết nối
     if (serverQueue) {
       serverQueue.player.stop();
       queue.delete(message.guild.id);
