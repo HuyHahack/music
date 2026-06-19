@@ -31,20 +31,23 @@ async function getDirectAudioUrl(url) {
 client.once('ready', async () => {
   console.log(`\n🎵 Bot phát nhạc đã sẵn sàng: ${client.user.tag}`);
 
-  // TỰ ĐỘNG NẠP YOUTUBE COOKIE ĐỂ BYPASS LỖI CHẶN 429
+  // TỰ ĐỘNG NẠP YOUTUBE COOKIE VÀ GIẢ LẬP TRÌNH DUYỆT CHỐNG CHẶN 429
   if (process.env.YOUTUBE_COOKIE) {
     try {
       await play.setToken({
         youtube: {
           cookie: process.env.YOUTUBE_COOKIE.trim()
-        }
+        },
+        useragent: [
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        ]
       });
-      console.log('✅ Đã nạp thành công YouTube Cookie! Bỏ qua cơ chế chặn IP (429) của YouTube.');
+      console.log('✅ Đã nạp thành công YouTube Cookie và User-Agent để bypass lỗi chặn 429!');
     } catch (err) {
-      console.error('❌ Lỗi khi nạp YouTube Cookie:', err.message);
+      console.error('❌ Lỗi khi nạp cấu hình YouTube Cookie:', err.message);
     }
   } else {
-    console.log('⚠️ Cảnh báo: Chưa phát hiện biến môi trường YOUTUBE_COOKIE. Bot có thể bị lỗi chặn 429 trên Render.');
+    console.log('⚠️ Cảnh báo: Chưa cấu hình biến môi trường YOUTUBE_COOKIE trên Render.');
   }
 });
 
