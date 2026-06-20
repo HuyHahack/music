@@ -13,6 +13,7 @@
     "play-dl": "^1.9.7",
     "express": "^4.19.2",
     "libsodium-wrappers": "^0.7.13",
+    "opusscript": "^0.1.1",
     "dotenv": "^16.4.5"
   }
 }
