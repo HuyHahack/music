@@ -1,5 +1,7 @@
-const { Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, getVoiceConnection } = require('@discordjs/voice');
 const { Riffy } = require('riffy');
+const play = require('play-dl');
 const express = require('express');
 const execAsync = require('util').promisify(require('child_process').exec);
 require('dotenv/config');
@@ -56,10 +58,38 @@ client.riffy = new Riffy(client, nodes, {
   }
 });
 
-// Bộ đếm thời gian chờ tránh spam tất cả các lệnh m! (Cooldown 3 giây)
-const globalCooldowns = new Map();
+// Bộ đệm quản lý các trình phát nhạc cục bộ (Local Player)
+const localPlayers = new Map(); // Key: guildId, Value: { connection, player, requesterId, title, ffmpeg }
 
-// Hàm trích xuất liên kết âm thanh trực tiếp bằng yt-dlp cho các nền tảng ngoài (TikTok, Facebook, SoundCloud...)
+// Các bộ nhớ đệm quản lý tìm kiếm và chống spam lệnh
+const playCooldowns = new Map();
+const tempSearchTracks = new Map(); // Lưu tạm kết quả tìm kiếm (Key: userId)
+
+// Hàm hỗ trợ chuyển đổi mili-giây sang định dạng MM:SS
+function formatTime(ms) {
+  if (isNaN(ms)) return '00:00';
+  const totalSecs = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSecs / 60);
+  const seconds = totalSecs % 60;
+  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
+
+// Hàm hỗ trợ vẽ Thanh tiến trình thời gian thực (Progress Bar) [1.2.7]
+function createProgressBar(position, duration, size = 15) {
+  if (isNaN(position) || isNaN(duration)) return '🔘' + '▬'.repeat(size) + ' [00:00 / 00:00]';
+  if (position > duration) position = duration;
+
+  const progress = Math.round((size * position) / duration);
+  const emptyProgress = size - progress;
+
+  const progressText = '▬'.repeat(progress);
+  const emptyProgressText = '▬'.repeat(emptyProgress);
+
+  const bar = `${progressText}🔘${emptyProgressText}`;
+  return `${bar} [${formatTime(position)} / ${formatTime(duration)}]`;
+}
+
+// Hàm trích xuất liên kết âm thanh trực tiếp bằng yt-dlp cho các nền tảng ngoài (TikTok, Facebook...)
 async function getDirectAudioUrl(url) {
   console.log(`\n[yt-dlp] 🌐 Đang trích xuất Direct URL cho liên kết: ${url}`);
   try {
@@ -87,7 +117,7 @@ client.once('ready', () => {
   console.log(`\n🎵 Bot phát nhạc Lai Đám Mây (Hybrid) đã trực tuyến: ${client.user.tag}`);
 });
 
-// Sự kiện: Bắt đầu phát bài nhạc mới
+// Sự kiện: Bắt đầu phát bài nhạc mới (Nâng cấp tích hợp tự động cập nhật thanh thời gian thực) [1.2.7]
 client.riffy.on("trackStart", async (player, track) => {
   const channel = client.channels.cache.get(player.textChannel);
   if (channel) {
@@ -96,15 +126,38 @@ client.riffy.on("trackStart", async (player, track) => {
     const embed = new EmbedBuilder()
       .setColor(0x00FF00)
       .setTitle('🎵 Đang phát nhạc')
-      .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>`)
+      .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>\n\n${createProgressBar(0, track.info.length)}`)
       .setFooter({ text: 'Chỉ người yêu cầu hoặc Admin mới có quyền sử dụng m!leave' })
       .setTimestamp();
-    await channel.send({ embeds: [embed] }).catch(() => {});
+
+    const msg = await channel.send({ embeds: [embed] }).catch(() => null);
+
+    if (msg) {
+      // Hủy bộ đếm thời gian cũ nếu còn sót lại [1.2.5]
+      if (player.progressInterval) clearInterval(player.progressInterval);
+
+      // Thiết lập bộ đếm tự động cập nhật (Edit) lại embed thanh thời gian sau mỗi 10 giây
+      player.progressInterval = setInterval(async () => {
+        const activePlayer = client.riffy.players.get(player.guildId);
+        if (!activePlayer || !activePlayer.playing || !activePlayer.current) {
+          clearInterval(player.progressInterval);
+          return;
+        }
+
+        const updatedEmbed = EmbedBuilder.from(embed)
+          .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>\n\n${createProgressBar(activePlayer.position, track.info.length)}`);
+
+        await msg.edit({ embeds: [updatedEmbed] }).catch(() => {
+          clearInterval(player.progressInterval);
+        });
+      }, 10000);
+    }
   }
 });
 
 // Sự kiện: Hết danh sách chờ nhạc của Lavalink
 client.riffy.on("queueEnd", async (player) => {
+  if (player.progressInterval) clearInterval(player.progressInterval); // Giải phóng bộ đếm thời gian [1.2.5]
   const channel = client.channels.cache.get(player.textChannel);
   player.destroy();
   if (channel) {
@@ -112,19 +165,75 @@ client.riffy.on("queueEnd", async (player) => {
   }
 });
 
-// Sự kiện: Đăng ký bắt lỗi luồng phát Lavalink tránh sập Bot
-client.riffy.on("playerError", (player, track, error) => {
-  console.error(`❌ Lỗi luồng phát tại Server ${player.guildId}:`, error.message);
-});
-
-client.riffy.on("nodeError", (node, error) => {
-  console.error(`❌ Lỗi máy chủ Lavalink "${node.name}":`, error.message);
-});
-
 // Trích xuất dữ liệu Gateway cập nhật Voice State cho Lavalink
 client.on("raw", (d) => {
   if (!["VOICE_STATE_UPDATE", "VOICE_SERVER_UPDATE"].includes(d.t)) return;
   client.riffy.updateVoiceState(d);
+});
+
+// ============ XỬ LÝ LỰA CHỌN BÀI HÁT TỪ MENU TÌM KIẾM (SEARCH SELECTOR) ============
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isStringSelectMenu()) return;
+
+  if (interaction.customId === 'search_select') {
+    await interaction.deferReply({ ephemeral: true });
+
+    const userId = interaction.user.id;
+    const searchData = tempSearchTracks.get(userId);
+
+    if (!searchData) {
+      return interaction.editReply({ content: '❌ Phiên tìm kiếm đã hết hạn hoặc bạn không phải là người gọi lệnh này!' });
+    }
+
+    const selectedIndex = parseInt(interaction.values[0]);
+    const chosenTrack = searchData.tracks[selectedIndex];
+
+    // Khởi tạo/Lấy player Lavalink
+    const player = client.riffy.createConnection({
+      guildId: interaction.guild.id,
+      voiceChannel: searchData.voiceChannelId,
+      textChannel: searchData.textChannelId,
+      deaf: true
+    });
+
+    player.requesterId = userId;
+    chosenTrack.info.requester = interaction.user;
+
+    // Thêm vào hàng chờ
+    player.queue.add(chosenTrack);
+
+    // Xóa tin nhắn bảng chọn tìm kiếm cho gọn kênh chat
+    const channel = await client.channels.fetch(searchData.textChannelId).catch(() => null);
+    if (channel) {
+      const searchMsg = await channel.messages.fetch(searchData.searchMsgId).catch(() => null);
+      if (searchMsg) await searchMsg.delete().catch(() => {});
+    }
+
+    // Xóa dữ liệu tạm trong bộ nhớ đệm
+    tempSearchTracks.delete(userId);
+
+    // Chờ kết nối phòng thoại sẵn sàng
+    let attempts = 0;
+    while (!player.connected && attempts < 20) {
+      await new Promise(r => setTimeout(r, 500));
+      attempts++;
+    }
+
+    if (player.connected) {
+      if (!player.playing && !player.paused) {
+        player.play();
+        await interaction.editReply({ content: '✅ Bắt đầu phát bài hát đã chọn!' });
+      } else {
+        await interaction.editReply({ content: `✅ Đã thêm vào hàng chờ: \`${chosenTrack.info.title}\`` });
+        if (channel) {
+          await channel.send(`✅ Đã thêm vào hàng chờ: \`${chosenTrack.info.title}\``).catch(() => {});
+        }
+      }
+    } else {
+      player.destroy();
+      await interaction.editReply({ content: '❌ Lỗi kết nối tới phòng thoại!' });
+    }
+  }
 });
 
 client.on('messageCreate', async (message) => {
@@ -161,13 +270,13 @@ client.on('messageCreate', async (message) => {
       return message.reply('❌ Bot không có quyền truy cập hoặc nói chuyện trong phòng voice của bạn!');
     }
 
-    // Kích hoạt hiệu ứng đang gõ chữ kín đáo của Discord
+    // Kích hoạt hiệu ứng đang gõ chữ kín đáo của Discord [1.2.6]
     await message.channel.sendTyping().catch(() => {});
 
     try {
       let finalQuery = query;
 
-      // Nhận diện liên kết ngoài và phân phối luồng xử lý phù hợp
+      // Nhận diện liên kết để phân phối luồng phát phù hợp
       const isUrl = query.startsWith('http://') || query.startsWith('https://');
       const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
       const isSpotify = isUrl && query.includes('spotify.com');
@@ -198,8 +307,9 @@ client.on('messageCreate', async (message) => {
         return message.reply('❌ Không tìm thấy bài hát hoặc lỗi kết nối máy chủ giải mã!');
       }
 
-      const { loadType, tracks, playlistInfo } = resolve;
+      const { loadType, tracks } = resolve;
 
+      // ---------------- PHÂN LOẠI A: PLAYLIST DANH SÁCH ----------------
       if (loadType === 'playlist') {
         for (const track of tracks) {
           track.info.requester = message.author;
@@ -216,15 +326,60 @@ client.on('messageCreate', async (message) => {
           if (!player.playing && !player.paused) {
             return player.play();
           } else {
-            // Bài trước chưa hết -> Tự động xếp hàng chờ và thông báo
-            return message.reply(`✅ Đã thêm danh sách phát **${playlistInfo.name}** (${tracks.length} bài) vào hàng chờ!`);
+            // Đã có bài đang phát dở -> Tự động xếp hàng chờ
+            return message.reply(`✅ Đã thêm danh sách phát **${resolve.playlistInfo.name}** (${tracks.length} bài) vào hàng chờ!`);
           }
         } else {
           player.destroy();
           return message.reply('❌ Kết nối tới phòng thoại thất bại do đường truyền Discord quá tải!');
         }
       } 
-      else if (loadType === 'search' || loadType === 'track') {
+      // ---------------- PHÂN LOẠI B: TÌM KIẾM TRÊN YOUTUBE MUSIC (KÍCH HOẠT SELECT MENU) ----------------
+      else if (loadType === 'search') {
+        const topTracks = tracks.slice(0, 5); // Lấy 5 kết quả tốt nhất
+
+        // Xây dựng Menu lựa chọn
+        const selectMenu = new StringSelectMenuBuilder()
+          .setCustomId('search_select')
+          .setPlaceholder('🛒 | Chọn bài hát bạn muốn phát...')
+          .addOptions(
+            topTracks.map((t, index) => 
+              new StringSelectMenuOptionBuilder()
+                .setLabel(`${index + 1}. ${t.info.title.slice(0, 80)}`)
+                .setDescription(`Tác giả: ${t.info.author.slice(0, 40)} | Thời lượng: ${formatTime(t.info.length)}`)
+                .setValue(`${index}`)
+            )
+          );
+
+        const row = new ActionRowBuilder().addComponents(selectMenu);
+
+        const embed = new EmbedBuilder()
+          .setColor(0x00FF00)
+          .setTitle('🔍 KẾT QUẢ TÌM KIẾM')
+          .setDescription(topTracks.map((t, index) => `**${index + 1}.** \`${t.info.title}\` - *${t.info.author}*`).join('\n'))
+          .setFooter({ text: 'Chọn bài hát bên dưới để phát. Bảng chọn tự hủy sau 1 phút.' })
+          .setTimestamp();
+
+        const searchMsg = await message.reply({ embeds: [embed], components: [row] });
+
+        // Lưu thông tin tạm thời vào Map để xử lý tương tác click
+        tempSearchTracks.set(message.author.id, {
+          tracks: topTracks,
+          voiceChannelId: voiceChannel.id,
+          textChannelId: message.channel.id,
+          searchMsgId: searchMsg.id
+        });
+
+        // Tự động xóa bảng chọn sau 1 phút nếu không có ai tương tác
+        setTimeout(() => {
+          if (tempSearchTracks.has(message.author.id)) {
+            tempSearchTracks.delete(message.author.id);
+            searchMsg.delete().catch(() => {});
+          }
+        }, 60000);
+      }
+      // ---------------- PHÂN LOẠI C: PHÁT TRỰC TIẾP LINK DUY NHẤT ----------------
+      else if (loadType === 'track') {
         const track = tracks.shift();
         track.info.requester = message.author;
         player.queue.add(track);
@@ -239,7 +394,7 @@ client.on('messageCreate', async (message) => {
           if (!player.playing && !player.paused) {
             return player.play();
           } else {
-            // Bài trước chưa hết -> Tự động xếp hàng chờ và thông báo
+            // Đã có bài đang phát dở -> Tự động xếp hàng chờ
             return message.reply(`✅ Đã thêm vào hàng chờ: \`${track.info.title}\``);
           }
         } else {
@@ -258,7 +413,7 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // ============ LỆNH m!leave (Tắt nhạc & Rời phòng) ============
+  // ============ LỆNH m!leave ============
   if (command === 'leave' || command === 'stop') {
     const player = getActivePlayer(message.guild.id);
 
@@ -273,6 +428,7 @@ client.on('messageCreate', async (message) => {
       return message.reply(`❌ Chỉ có **người yêu cầu phát nhạc** (<@${requesterId}>) hoặc **Quản trị viên** mới được dừng nhạc!`);
     }
 
+    if (player.player.progressInterval) clearInterval(player.player.progressInterval); // Hủy bộ đếm thời gian dính [1.2.5]
     player.player.destroy();
     await message.reply('👋 Đã dừng nhạc và rời khỏi phòng voice theo yêu cầu.');
   }
@@ -340,7 +496,7 @@ client.on('messageCreate', async (message) => {
     const player = getActivePlayer(message.guild.id);
     if (!player) return message.reply('❌ Bot hiện tại đang không phát nhạc!');
 
-    const currentLoop = player.player.loop; // Nhận diện trạng thái lặp hiện tại ("none", "track", "queue")
+    const currentLoop = player.player.loop;
     let newLoop = "none";
     let statusText = "TẮT";
 
@@ -355,7 +511,7 @@ client.on('messageCreate', async (message) => {
       statusText = "TẮT LẶP LẠI ❌";
     }
 
-    player.player.setLoop(newLoop); // Cập nhật chế độ lặp của Riffy
+    player.player.setLoop(newLoop);
     await message.reply(`✅ Đã thiết lập chế độ lặp nhạc thành: **${statusText}**`);
   }
 });
