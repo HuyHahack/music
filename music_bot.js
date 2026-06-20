@@ -46,7 +46,6 @@ client.riffy = new Riffy(client, nodes, {
   },
   defaultSearchPlatform: "ytmsearch",
   restVersion: "v4",
-  // VÁ LỖI RIFFY: Bổ sung cấu hình bypass để chặn đứng lỗi sập 'nodeFetchInfo'
   bypassChecks: {
     nodeFetchInfo: true
   }
@@ -94,8 +93,8 @@ client.riffy.on("trackStart", async (player, track) => {
     const embed = new EmbedBuilder()
       .setColor(0x00FF00)
       .setTitle('🎵 Đang phát nhạc')
-      .setDescription(`**Tác phẩm:** \`${track.info.title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>`)
-      .setFooter({ text: 'Sử dụng m!leave để dừng' })
+      .setDescription(`**Tác phẩm:** \`${track.info.title}\`\n**Yêu cầu bởi:** <@${player.requesterId}>`)
+      .setFooter({ text: 'Chỉ người yêu cầu hoặc Admin mới có quyền sử dụng m!leave' })
       .setTimestamp();
     await channel.send({ embeds: [embed] }).catch(() => {});
   }
@@ -233,7 +232,14 @@ client.on('messageCreate', async (message) => {
         let title = "Đang phát nhạc";
 
         if (query.includes('soundcloud.com')) {
-          const streamInfo = await play.stream(query).catch(() => null);
+          // Bắt lỗi chi tiết và ghi nhận nhật ký (log) cho SoundCloud
+          const streamInfo = await play.stream(query).catch((err) => {
+            console.error('\n❌ LỖI GIẢI MÃ LIÊN KẾT SOUNDCLOUD:');
+            console.error(err);
+            console.error('=====================================\n');
+            return null;
+          });
+
           if (!streamInfo) return message.reply('❌ Lỗi kết nối luồng phát SoundCloud!');
           stream = streamInfo.stream;
           inputType = streamInfo.type;
