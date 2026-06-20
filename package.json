@@ -1,7 +1,7 @@
 {
   "name": "carl-music-bot-lavalink",
   "version": "1.0.0",
-  "description": "High Performance Hybrid Lavalink and Local Music Bot",
+  "description": "High Performance Hybrid Lavalink and Local Music Bot with DAVE Support",
   "main": "music_bot.js",
   "scripts": {
     "start": "node music_bot.js"
