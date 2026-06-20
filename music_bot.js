@@ -29,13 +29,6 @@ const PREFIX = 'm!';
 // Cấu hình cụm máy chủ Lavalink v4 công cộng cho YouTube & SoundCloud (Tự động Load Balancing) [2.2.1]
 const nodes = [
   {
-    name: "AjieBlogs EU",
-    host: "lava-v4.ajieblogs.eu.org",
-    port: 443,
-    password: "https://dsc.gg/ajidevserver",
-    secure: true
-  },
-  {
     name: "Serenetia v4",
     host: "lavalinkv4.serenetia.com",
     port: 443,
@@ -43,11 +36,11 @@ const nodes = [
     secure: true
   },
   {
-    name: "HeavenCloud",
-    host: "89.106.84.59",
-    port: 4000,
-    password: "heavencloud.in",
-    secure: false
+    name: "AjieBlogs EU",
+    host: "lava-v4.ajieblogs.eu.org",
+    port: 443,
+    password: "https://dsc.gg/ajidevserver",
+    secure: true
   }
 ];
 
@@ -66,7 +59,7 @@ client.riffy = new Riffy(client, nodes, {
 // Bộ đếm thời gian chờ tránh spam toàn bộ các lệnh m!
 const globalCooldowns = new Map();
 
-// Hàm trích xuất liên kết âm thanh trực tiếp bằng yt-dlp cho các nền tảng ngoài (TikTok, Facebook...)
+// Hàm trích xuất liên kết âm thanh trực tiếp bằng yt-dlp cho các nền tảng ngoài (TikTok, Facebook, SoundCloud...)
 async function getDirectAudioUrl(url) {
   console.log(`\n[yt-dlp] 🌐 Đang trích xuất Direct URL cho liên kết: ${url}`);
   try {
@@ -168,11 +161,10 @@ client.on('messageCreate', async (message) => {
       // Nhận diện liên kết để phân phối luồng phát phù hợp
       const isUrl = query.startsWith('http://') || query.startsWith('https://');
       const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
-      const isSoundCloud = isUrl && query.includes('soundcloud.com');
       const isSpotify = isUrl && query.includes('spotify.com');
 
-      // CHỈ dùng yt-dlp cho các liên kết ngoài thực sự (như TikTok, Facebook...) không được Lavalink hỗ trợ mặc định [5]
-      if (isUrl && !isYouTube && !isSoundCloud && !isSpotify) {
+      // Cho phép SoundCloud chạy qua yt-dlp để lấy link direct .mp3 bypass Lavalink block [2.2.7]
+      if (isUrl && !isYouTube && !isSpotify) {
         const directUrl = await getDirectAudioUrl(query);
         if (directUrl) {
           finalQuery = directUrl; // Gửi link âm thanh tĩnh này cho Lavalink giải mã từ xa!
