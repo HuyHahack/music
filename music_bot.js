@@ -1,10 +1,10 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const { Riffy } = require('riffy');
-const express = require('express'); // Bổ sung Express
+const express = require('express');
 const exec = require('util').promisify(require('child_process').exec);
 require('dotenv/config');
 
-// ============ EXPRESS SERVER (Bổ sung cho Render scan cổng) ============
+// ============ EXPRESS SERVER (Bảo đảm Render scan cổng thành công) ============
 const app = express();
 app.use(express.json());
 app.get('/', (req, res) => res.json({ status: 'online' }));
@@ -64,7 +64,7 @@ client.once('ready', () => {
   console.log(`\n🎵 Bot phát nhạc Lavalink đã trực tuyến: ${client.user.tag}`);
 });
 
-// Sự kiện: Bắt đầu phát bài nhạc mới (Tối giản hoàn toàn chữ thừa)
+// Sự kiện: Bắt đầu phát bài nhạc mới
 client.riffy.on("trackStart", async (player, track) => {
   const channel = client.channels.cache.get(player.textChannel);
   if (channel) {
@@ -116,7 +116,6 @@ client.on('messageCreate', async (message) => {
     await message.channel.sendTyping().catch(() => {});
 
     try {
-      let streamUrl = null;
       let finalQuery = query;
 
       // Nhận diện liên kết ngoài và phân phối luồng xử lý phù hợp
@@ -152,7 +151,7 @@ client.on('messageCreate', async (message) => {
         return message.reply('❌ Không tìm thấy bài hát hoặc lỗi kết nối máy chủ giải mã!');
       }
 
-      const { loadType, tracks, playlistInfo } = resolve;
+      const { loadType, tracks } = resolve;
 
       if (loadType === 'playlist') {
         for (const track of tracks) {
@@ -161,12 +160,6 @@ client.on('messageCreate', async (message) => {
         }
 
         // --- BỘ LỌC CHỜ KẾT NỐI HOÀN TẤT TRƯỚC KHI PHÁT ---
-        const now = Date.now();
-        let connectionReady = false;
-        
-        const inKey = `${interaction.guild.id}_${productType}`;
-        
-        // Hẹn giờ chờ cổng kết nối Voice sẵn sàng
         let attempts = 0;
         while (!player.connected && attempts < 20) {
           await new Promise(r => setTimeout(r, 500));
@@ -210,23 +203,23 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // ============ LỆNH m!leave ============
+  // ============ LỆNH m!leave (Tắt nhạc & Rời phòng) ============
   if (command === 'leave' || command === 'stop') {
     const player = client.riffy.players.get(message.guild.id);
-    if (!player) return message.reply('❌ Bot hiện tại không có trong phòng thoại hoặc đang không phát nhạc!');
+    if (!player) return message.reply('❌ Bot hiện tại đang không kết nối phòng thoại!');
 
     const requesterId = player.requesterId;
     const isAdmin = message.member.permissions.has(PermissionFlagsBits.Administrator);
 
     if (requesterId && message.author.id !== requesterId && !isAdmin) {
-      return message.reply(`❌ Chỉ có **người phát bài hát hiện tại** (<@${requesterId}>) hoặc **Quản trị viên** mới được quyền dừng nhạc!`);
+      return message.reply(`❌ Chỉ có **người yêu cầu phát nhạc** (<@${requesterId}>) hoặc **Quản trị viên** mới được dừng nhạc!`);
     }
 
     player.destroy();
     await message.reply('👋 Đã dừng nhạc và rời khỏi phòng voice theo yêu cầu.');
   }
 
-  // ============ LỆNH m!skip ============
+  // ============ LỆNH m!skip (Bỏ qua bài hát) ============
   if (command === 'skip' || command === 's') {
     const player = client.riffy.players.get(message.guild.id);
     if (!player) return message.reply('❌ Bot hiện tại đang không phát nhạc!');
@@ -242,7 +235,7 @@ client.on('messageCreate', async (message) => {
     await message.reply('⏭️ Đã bỏ qua bài hát hiện tại.');
   }
 
-  // ============ LỆNH m!pause ============
+  // ============ LỆNH m!pause (Tạm dừng) ============
   if (command === 'pause') {
     const player = client.riffy.players.get(message.guild.id);
     if (!player) return message.reply('❌ Bot hiện tại đang không phát nhạc!');
@@ -250,7 +243,7 @@ client.on('messageCreate', async (message) => {
     await message.reply('⏸️ Đã tạm dừng phát nhạc.');
   }
 
-  // ============ LỆNH m!resume ============
+  // ============ LỆNH m!resume (Tiếp tục phát) ============
   if (command === 'resume') {
     const player = client.riffy.players.get(message.guild.id);
     if (!player) return message.reply('❌ Bot hiện tại đang không phát nhạc!');
@@ -258,7 +251,7 @@ client.on('messageCreate', async (message) => {
     await message.reply('▶️ Tiếp tục phát nhạc.');
   }
 
-  // ============ LỆNH m!queue ============
+  // ============ LỆNH m!queue (Xem danh sách chờ) ============
   if (command === 'queue' || command === 'q') {
     const player = client.riffy.players.get(message.guild.id);
     if (!player || player.queue.length === 0) return message.reply('❌ Danh sách hàng chờ hiện tại đang trống!');
@@ -273,7 +266,7 @@ client.on('messageCreate', async (message) => {
     await message.reply({ embeds: [embed] });
   }
 
-  // ============ LỆNH m!volume ============
+  // ============ LỆNH m!volume (Chỉnh âm lượng) ============
   if (command === 'volume' || command === 'vol') {
     const player = client.riffy.players.get(message.guild.id);
     if (!player) return message.reply('❌ Bot hiện tại đang không phát nhạc!');
