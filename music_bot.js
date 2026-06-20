@@ -3,7 +3,7 @@ const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerSta
 const { Riffy } = require('riffy');
 const play = require('play-dl');
 const express = require('express');
-const { spawn } = require('child_process'); // Sử dụng spawn để truyền luồng trực tiếp [5]
+const execAsync = require('util').promisify(require('child_process').exec); // Sử dụng exec để lấy URL tĩnh [1.2.7]
 require('dotenv/config');
 
 // ============ EXPRESS SERVER (Bảo đảm Render scan cổng thành công) ============
@@ -32,7 +32,7 @@ const PREFIX = 'm!';
 const nodes = [
   {
     name: "AjieBlogs EU",
-    host: "lava-v4.ajieblogs.eu.org",
+    host: "lava-v4.serenetia.com",
     port: 443,
     password: "https://dsc.gg/ajidevserver",
     secure: true
@@ -57,27 +57,18 @@ const playCooldowns = new Map();
 // Bộ nhóm đệm quản lý các trình phát nhạc cục bộ (Local Player) bằng thư viện @discordjs/voice
 const localPlayers = new Map(); // Key: guildId, Value: { connection, player, requesterId, title }
 
-// Hàm gọi tiến trình yt-dlp tải và truyền luồng âm thanh trực tiếp (stdout) ra thời gian thực [5]
-function getYtdlpStream(url) {
-  console.log(`\n[yt-dlp] 🌐 Khởi tạo tiến trình Stream cho liên kết: ${url}`);
-  
-  const ytdlp = spawn('yt-dlp', [
-    '-f', 'bestaudio',
-    '--no-playlist',
-    '-o', '-', // Xuất dữ liệu trực tiếp ra stdout (Piping)
-    url
-  ]);
-
-  // Log chi tiết tiến trình tải (% tải, tốc độ, định dạng) của yt-dlp ra terminal Render
-  ytdlp.stderr.on('data', (data) => {
-    console.log(`[yt-dlp Log]: ${data.toString().trim()}`);
-  });
-
-  ytdlp.on('close', (code) => {
-    console.log(`[yt-dlp] 📌 Tiến trình tải đóng với mã: ${code}`);
-  });
-
-  return ytdlp.stdout; // Trả về luồng Readable Stream để nạp trực tiếp vào trình phát nhạc
+// Hàm trích xuất liên kết âm thanh trực tiếp (Direct URL) bằng yt-dlp [1.2.7]
+async function getDirectAudioUrl(url) {
+  console.log(`\n[yt-dlp] 🌐 Đang trích xuất Direct URL cho liên kết: ${url}`);
+  try {
+    const { stdout } = await execAsync(`yt-dlp -g "${url}"`);
+    const directUrl = stdout.trim().split('\n')[0];
+    console.log(`[yt-dlp] ✅ Đã lấy được Direct URL thành công.`);
+    return directUrl;
+  } catch (err) {
+    console.error('⚠️ Lỗi trích xuất yt-dlp:', err.message);
+    return null;
+  }
 }
 
 // Hàm giám sát thông minh tự động phát hiện trình phát nhạc đang hoạt động trên Server
@@ -160,13 +151,12 @@ client.on('messageCreate', async (message) => {
     playCooldowns.set(userId, now);
     setTimeout(() => playCooldowns.delete(userId), cooldownAmount);
 
-    // Kích hoạt hiệu ứng đang gõ chữ kín đáo của Discord
+    // Bật hiệu ứng đang gõ chữ kín đáo của Discord
     await message.channel.sendTyping().catch(() => {});
 
     try {
+      let streamUrl = null;
       let finalQuery = query;
-      let stream = null;
-      let inputType = null;
       let isLocalEngine = false;
       let title = "Đang phát nhạc";
 
@@ -175,45 +165,20 @@ client.on('messageCreate', async (message) => {
       const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
 
       if (isUrl && !isYouTube) {
-        if (query.includes('soundcloud.com')) {
-          console.log('[SOUNDCLOUD] 🔍 Cố gắng giải mã luồng qua play-dl...');
-          const streamInfo = await play.stream(query).catch((err) => {
-            console.warn('[SOUNDCLOUD] play-dl không khả dụng hoặc bị chặn, chuyển sang chế độ dự phòng yt-dlp...', err.message);
-            return null;
-          });
-
-          if (streamInfo) {
-            console.log('[SOUNDCLOUD] ✅ play-dl giải mã thành công.');
-            stream = streamInfo.stream;
-            inputType = streamInfo.type;
-            title = "SoundCloud Track";
-            isLocalEngine = true;
-          } else {
-            // TẦNG DỰ PHÒNG CHỐNG CHẶN SOUNDCLOUD: Gửi thẳng yêu cầu cho yt-dlp stream trực tiếp [5]
-            console.log('[SOUNDCLOUD] 🔄 Kích hoạt yt-dlp stream trực tiếp cho SoundCloud...');
-            try {
-              stream = getYtdlpStream(query);
-              title = "SoundCloud (yt-dlp Bypass)";
-              isLocalEngine = true;
-            } catch (err) {
-              console.error('[SOUNDCLOUD] ❌ yt-dlp Bypass thất bại:', err.message);
-            }
-          }
+        // TẤT CẢ các liên kết ngoài (SoundCloud, TikTok, Facebook...) đều trích xuất link thô trực tiếp [5]
+        const directUrl = await getDirectAudioUrl(query);
+        if (directUrl) {
+          streamUrl = directUrl;
+          title = `Liên kết ngoài (${new URL(query).hostname})`;
+          isLocalEngine = true;
         } else {
-          // Các liên kết ngoài khác (TikTok, Facebook...) nạp trực tiếp qua yt-dlp stream [5]
-          console.log(`[OTHER] 🔄 Kích hoạt yt-dlp stream trực tiếp cho liên kết ngoài: ${query}`);
-          try {
-            stream = getYtdlpStream(query);
-            title = `Liên kết ngoài (${new URL(query).hostname})`;
-            isLocalEngine = true;
-          } catch (err) {
-            console.error('[OTHER] ❌ Lỗi chạy yt-dlp stream:', err.message);
-          }
+          finalQuery = query; // Fallback thử gửi cho Lavalink nếu trích xuất thất bại
         }
       }
 
       // --- TRƯỜNG HỢP A: PHÁT NHẠC BẰNG THƯ VIỆN CỤC BỘ (SoundCloud/TikTok...) ---
-      if (isLocalEngine && stream) {
+      if (isLocalEngine && streamUrl) {
+        // Tắt kết nối của trình phát Lavalink cũ nếu có để tránh tranh chấp cổng voice
         const lavalinkPlayer = client.riffy.players.get(message.guild.id);
         if (lavalinkPlayer) lavalinkPlayer.destroy();
 
@@ -224,9 +189,9 @@ client.on('messageCreate', async (message) => {
         });
 
         const player = createAudioPlayer();
-        const resource = inputType 
-          ? createAudioResource(stream, { inputType }) 
-          : createAudioResource(stream);
+        
+        // Phát trực tiếp đường dẫn thô, Discord Voice sẽ tự động tải trực tiếp từ CDN của trang nguồn! [1.1.2]
+        const resource = createAudioResource(streamUrl, { inlineVolume: false });
 
         player.play(resource);
         connection.subscribe(player);
