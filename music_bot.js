@@ -3,11 +3,10 @@ const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerSta
 const { Riffy } = require('riffy');
 const play = require('play-dl');
 const express = require('express');
-const https = require('https'); // Thêm thư viện mạng gốc để tải luồng HTTP
-const exec = require('util').promisify(require('child_process').exec);
+const { spawn } = require('child_process'); // Sử dụng spawn để truyền luồng trực tiếp [5]
 require('dotenv/config');
 
-// ============ EXPRESS SERVER ============
+// ============ EXPRESS SERVER (Bảo đảm Render scan cổng thành công) ============
 const app = express();
 app.use(express.json());
 app.get('/', (req, res) => res.json({ status: 'online' }));
@@ -55,35 +54,30 @@ client.riffy = new Riffy(client, nodes, {
 // Bộ đếm thời gian chờ tìm kiếm tránh spam lệnh
 const playCooldowns = new Map();
 
-// Bộ nhóm đệm quản lý các trình phát nhạc cục bộ (Local Player)
+// Bộ nhóm đệm quản lý các trình phát nhạc cục bộ (Local Player) bằng thư viện @discordjs/voice
 const localPlayers = new Map(); // Key: guildId, Value: { connection, player, requesterId, title }
 
-// Hàm trích xuất liên kết âm thanh trực tiếp bằng yt-dlp cho các nền tảng ngoài (TikTok, Facebook...)
-async function getDirectAudioUrl(url) {
-  try {
-    const { stdout } = await exec(`yt-dlp -f bestaudio -g "${url}"`);
-    return stdout.trim().split('\n')[0];
-  } catch (err) {
-    console.error('⚠️ yt-dlp gặp sự cố khi giải mã liên kết:', err.message);
-    return null;
-  }
-}
+// Hàm gọi tiến trình yt-dlp tải và truyền luồng âm thanh trực tiếp (stdout) ra thời gian thực [5]
+function getYtdlpStream(url) {
+  console.log(`\n[yt-dlp] 🌐 Khởi tạo tiến trình Stream cho liên kết: ${url}`);
+  
+  const ytdlp = spawn('yt-dlp', [
+    '-f', 'bestaudio',
+    '--no-playlist',
+    '-o', '-', // Xuất dữ liệu trực tiếp ra stdout (Piping)
+    url
+  ]);
 
-// Hàm tải Readable Stream từ Direct URL hỗ trợ tự động bám theo HTTP Redirect (Chuyển hướng CDN)
-function getHttpStream(url) {
-  return new Promise((resolve, reject) => {
-    https.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-      }
-    }, (res) => {
-      // Nếu gặp HTTP Redirect (Mã 3xx), đệ quy bám theo địa chỉ mới trong header.location
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return resolve(getHttpStream(res.headers.location));
-      }
-      resolve(res);
-    }).on('error', reject);
+  // Log chi tiết tiến trình tải (% tải, tốc độ, định dạng) của yt-dlp ra terminal Render
+  ytdlp.stderr.on('data', (data) => {
+    console.log(`[yt-dlp Log]: ${data.toString().trim()}`);
   });
+
+  ytdlp.on('close', (code) => {
+    console.log(`[yt-dlp] 📌 Tiến trình tải đóng với mã: ${code}`);
+  });
+
+  return ytdlp.stdout; // Trả về luồng Readable Stream để nạp trực tiếp vào trình phát nhạc
 }
 
 // Hàm giám sát thông minh tự động phát hiện trình phát nhạc đang hoạt động trên Server
@@ -111,7 +105,7 @@ client.riffy.on("trackStart", async (player, track) => {
     const embed = new EmbedBuilder()
       .setColor(0x00FF00)
       .setTitle('🎵 Đang phát nhạc')
-      .setDescription(`**Tác phẩm:** \`${track.info.title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>`)
+      .setDescription(`**Tác phẩm:** \`${track.info.title}\`\n**Yêu cầu bởi:** <@${player.requesterId}>`)
       .setFooter({ text: 'Chỉ người yêu cầu hoặc Admin mới có quyền sử dụng m!leave' })
       .setTimestamp();
     await channel.send({ embeds: [embed] }).catch(() => {});
@@ -166,54 +160,54 @@ client.on('messageCreate', async (message) => {
     playCooldowns.set(userId, now);
     setTimeout(() => playCooldowns.delete(userId), cooldownAmount);
 
-    // Bật hiệu ứng đang gõ chữ kín đáo của Discord
+    // Kích hoạt hiệu ứng đang gõ chữ kín đáo của Discord
     await message.channel.sendTyping().catch(() => {});
 
     try {
-      let streamUrl = null;
       let finalQuery = query;
       let stream = null;
       let inputType = null;
       let isLocalEngine = false;
       let title = "Đang phát nhạc";
 
-      // Phân bổ và nhận diện liên kết thông minh
-      if (query.startsWith('http://') || query.startsWith('https://')) {
-        if (query.includes('youtube.com') || query.includes('youtu.be') || query.includes('spotify.com')) {
-          finalQuery = query;
-        } else if (query.includes('soundcloud.com')) {
-          // Thử lấy bằng play-dl trước
-          const streamInfo = await play.stream(query).catch(() => null);
+      // Nhận diện liên kết để phân phối luồng phát phù hợp
+      const isUrl = query.startsWith('http://') || query.startsWith('https://');
+      const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
+
+      if (isUrl && !isYouTube) {
+        if (query.includes('soundcloud.com')) {
+          console.log('[SOUNDCLOUD] 🔍 Cố gắng giải mã luồng qua play-dl...');
+          const streamInfo = await play.stream(query).catch((err) => {
+            console.warn('[SOUNDCLOUD] play-dl không khả dụng hoặc bị chặn, chuyển sang chế độ dự phòng yt-dlp...', err.message);
+            return null;
+          });
+
           if (streamInfo) {
+            console.log('[SOUNDCLOUD] ✅ play-dl giải mã thành công.');
             stream = streamInfo.stream;
             inputType = streamInfo.type;
             title = "SoundCloud Track";
             isLocalEngine = true;
           } else {
-            // TẦNG DỰ PHÒNG CHỐNG CHẶN SOUNDCLOUD CLIENT ID: Dùng yt-dlp lấy link thô và chuyển thành HTTP stream [2.2.7]
-            console.log('🔄 Đang kích hoạt yt-dlp bypass SoundCloud...');
-            const directUrl = await getDirectAudioUrl(query);
-            if (directUrl) {
-              const httpStream = await getHttpStream(directUrl).catch(() => null);
-              if (httpStream) {
-                stream = httpStream;
-                inputType = null; // Tự động giải mã định dạng bằng FFmpeg
-                title = "SoundCloud (Bypass)";
-                isLocalEngine = true;
-              }
+            // TẦNG DỰ PHÒNG CHỐNG CHẶN SOUNDCLOUD: Gửi thẳng yêu cầu cho yt-dlp stream trực tiếp [5]
+            console.log('[SOUNDCLOUD] 🔄 Kích hoạt yt-dlp stream trực tiếp cho SoundCloud...');
+            try {
+              stream = getYtdlpStream(query);
+              title = "SoundCloud (yt-dlp Bypass)";
+              isLocalEngine = true;
+            } catch (err) {
+              console.error('[SOUNDCLOUD] ❌ yt-dlp Bypass thất bại:', err.message);
             }
           }
         } else {
-          // Các liên kết ngoài khác (TikTok, Facebook...) chuyển qua yt-dlp và phát dạng HTTP Stream [5]
-          const directUrl = await getDirectAudioUrl(query);
-          if (directUrl) {
-            const httpStream = await getDirectAudioUrl(query);
-            if (httpStream) {
-              stream = httpValue = httpStream; // Gán luồng mạng trực tiếp
-              stream = await getHttpStream(directUrl).catch(() => null);
-              title = `Liên kết ngoài (${new URL(query).hostname})`;
-              isLocalEngine = true;
-            }
+          // Các liên kết ngoài khác (TikTok, Facebook...) nạp trực tiếp qua yt-dlp stream [5]
+          console.log(`[OTHER] 🔄 Kích hoạt yt-dlp stream trực tiếp cho liên kết ngoài: ${query}`);
+          try {
+            stream = getYtdlpStream(query);
+            title = `Liên kết ngoài (${new URL(query).hostname})`;
+            isLocalEngine = true;
+          } catch (err) {
+            console.error('[OTHER] ❌ Lỗi chạy yt-dlp stream:', err.message);
           }
         }
       }
