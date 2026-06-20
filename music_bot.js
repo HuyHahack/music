@@ -1,54 +1,83 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, getVoiceConnection } = require('@discordjs/voice');
-const play = require('play-dl');
-const exec = require('util').promisify(require('child_process').exec);
+const { Riffy } = require('riffy');
 require('dotenv/config');
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildVoiceStates // Bắt buộc phải có intent này để đọc trạng thái phòng thoại
+    GatewayIntentBits.GuildVoiceStates, // Bắt buộc để nhận diện người dùng ra vào phòng voice [1.1.5]
+    GatewayIntentBits.GuildMessageReactions
   ]
 });
 
 const PREFIX = 'm!';
-const queue = new Map(); // Lưu vết trạng thái: Key là guildId, Value là { connection, player, requesterId, title, url }
 
-// Hàm phân tích và trích xuất link âm thanh trực tiếp cho TikTok và các trang web khác bằng yt-dlp
-async function getDirectAudioUrl(url) {
-  try {
-    const { stdout } = await exec(`yt-dlp -f bestaudio -g "${url}"`);
-    return stdout.trim().split('\n')[0];
-  } catch (err) {
-    console.error('⚠️ yt-dlp không khả dụng hoặc gặp lỗi giải mã:', err.message);
-    return null;
+// Cấu hình máy chủ Lavalink v4 công cộng miễn phí (Hỗ trợ SSL)
+const nodes = [
+  {
+    host: "lavalinkv4.serenetia.com",
+    port: 443,
+    password: "https://dsc.gg/ajidevserver",
+    secure: true
   }
-}
+];
 
-client.once('ready', async () => {
-  console.log(`\n🎵 Bot phát nhạc đã sẵn sàng: ${client.user.tag}`);
+client.riffy = new Riffy(client, nodes, {
+  send: (payload) => {
+    const guild = client.guilds.cache.get(payload.d.guild_id);
+    if (guild) guild.shard.send(payload);
+  },
+  defaultSearchPlatform: "ytmsearch", // Tìm kiếm mặc định trên Youtube Music
+  restVersion: "v4" // Sử dụng chuẩn Rest API v4 của Lavalink
+});
 
-  // TỰ ĐỘNG NẠP YOUTUBE COOKIE VÀ GIẢ LẬP TRÌNH DUYỆT CHỐNG CHẶN 429
-  if (process.env.YOUTUBE_COOKIE) {
-    try {
-      await play.setToken({
-        youtube: {
-          cookie: process.env.YOUTUBE_COOKIE.trim()
-        },
-        useragent: [
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-        ]
-      });
-      console.log('✅ Đã nạp thành công YouTube Cookie và User-Agent để bypass lỗi chặn 429!');
-    } catch (err) {
-      console.error('❌ Lỗi khi nạp cấu hình YouTube Cookie:', err.message);
-    }
-  } else {
-    console.log('⚠️ Cảnh báo: Chưa cấu hình biến môi trường YOUTUBE_COOKIE trên Render.');
+// Bộ nhớ đệm quản lý thời gian chờ (cooldown) cho lệnh phát nhạc (10 giây)
+const playCooldowns = new Map();
+
+client.once('ready', () => {
+  // Khởi chạy kết nối tới hệ thống máy chủ Lavalink
+  client.riffy.init(client.user.id);
+  console.log(`\n🎵 Bot phát nhạc Lavalink đã trực tuyến: ${client.user.tag}`);
+});
+
+// Sự kiện: Kết nối thành công tới Lavalink Node
+client.riffy.on("nodeConnect", (node) => {
+  console.log(`✅ Kết nối thành công tới Lavalink Node: "${node.name}"`);
+});
+
+// Sự kiện: Node gặp sự cố
+client.riffy.on("nodeError", (node, error) => {
+  console.error(`❌ Máy chủ Lavalink "${node.name}" gặp lỗi:`, error.message);
+});
+
+// Sự kiện: Bắt đầu phát bài nhạc mới
+client.riffy.on("trackStart", async (player, track) => {
+  const channel = client.channels.cache.get(player.textChannel);
+  if (channel) {
+    const embed = new EmbedBuilder()
+      .setColor(0x00FF00)
+      .setTitle('🎵 BẮT ĐẦU PHÁT NHẠC (LAVALINK)')
+      .setDescription(`**Tác phẩm:** \`${track.info.title}\`\n**Tác giả:** \`${track.info.author}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>`)
+      .setTimestamp();
+    channel.send({ embeds: [embed] }).catch(() => {});
   }
+});
+
+// Sự kiện: Hết hàng chờ nhạc
+client.riffy.on("queueEnd", async (player) => {
+  const channel = client.channels.cache.get(player.textChannel);
+  player.destroy(); // Ngắt kết nối phòng thoại
+  if (channel) {
+    channel.send("👋 Danh sách phát đã kết thúc. Bot đã rời phòng thoại.").catch(() => {});
+  }
+});
+
+// Đọc dữ liệu thô từ Discord Gateway để cập nhật trạng thái voice cho Lavalink
+client.on("raw", (d) => {
+  if (!["VOICE_STATE_UPDATE", "VOICE_SERVER_UPDATE"].includes(d.t)) return;
+  client.riffy.updateVoiceState(d);
 });
 
 client.on('messageCreate', async (message) => {
@@ -67,109 +96,88 @@ client.on('messageCreate', async (message) => {
 
     const permissions = voiceChannel.permissionsFor(client.user);
     if (!permissions.has('Connect') || !permissions.has('Speak')) {
-      return message.reply('❌ Bot không có quyền truy cập hoặc nói chuyện trong phòng voice của bạn!');
+      return message.reply('❌ Bot không có quyền kết nối hoặc nói chuyện trong phòng voice của bạn!');
     }
 
-    const replyMsg = await message.reply('🔄 Đang xử lý giải mã liên kết âm thanh...');
+    // Cooldown check chống spam tìm kiếm
+    const userId = message.author.id;
+    const now = Date.now();
+    const cooldownAmount = 10 * 1000; // 10 giây
+    if (playCooldowns.has(userId)) {
+      const expirationTime = playCooldowns.get(userId) + cooldownAmount;
+      if (now < expirationTime) {
+        const timeLeft = ((expirationTime - now) / 1000).toFixed(1);
+        return message.reply(`⚠️ Bạn đang thao tác quá nhanh! Vui lòng đợi **${timeLeft} giây**.`);
+      }
+    }
+    playCooldowns.set(userId, now);
+    setTimeout(() => playCooldowns.delete(userId), cooldownAmount);
+
+    const replyMsg = await message.reply('🔄 Đang gửi truy vấn tìm kiếm tới hệ thống Lavalink...');
 
     try {
-      let streamUrl = null;
-      let title = "Đang phát nhạc";
-      let inputType = null;
-      let stream = null;
-
-      // Kiểm tra nếu là một liên kết ngoài
-      if (query.startsWith('http://') || query.startsWith('https://')) {
-        if (query.includes('youtube.com') || query.includes('youtu.be') || query.includes('soundcloud.com') || query.includes('spotify.com')) {
-          const streamInfo = await play.stream(query);
-          stream = streamInfo.stream;
-          inputType = streamInfo.type;
-          title = query;
-        } else {
-          streamUrl = await getDirectAudioUrl(query);
-          if (!streamUrl) {
-            return replyMsg.edit('❌ Định dạng liên kết ngoài này chưa được hỗ trợ hoặc không thể trích xuất âm thanh!');
-          }
-          title = `Liên kết ngoài (${new URL(query).hostname})`;
-        }
-      } else {
-        const yt_info = await play.search(query, { limit: 1 });
-        if (yt_info.length === 0) return replyMsg.edit('❌ Không tìm thấy bài hát nào khớp với từ khóa!');
-        const streamInfo = await play.stream(yt_info[0].url);
-        stream = streamInfo.stream;
-        inputType = streamInfo.type;
-        title = yt_info[0].title;
-      }
-
-      const connection = joinVoiceChannel({
-        channelId: voiceChannel.id,
+      // Khởi tạo player kết nối qua Lavalink
+      const player = client.riffy.createConnection({
         guildId: message.guild.id,
-        adapterCreator: message.guild.voiceAdapterCreator,
+        voiceChannel: voiceChannel.id,
+        textChannel: message.channel.id,
+        deaf: true
       });
 
-      const player = createAudioPlayer();
-      
-      let resource;
-      if (stream) {
-        resource = createAudioResource(stream, { inputType });
-      } else {
-        resource = createAudioResource(streamUrl);
+      // Lưu trữ ID người phát để phục vụ phân quyền m!leave
+      player.requesterId = message.author.id;
+
+      // Tìm kiếm hoặc giải mã liên kết từ bất cứ nguồn nào (YouTube, Soundcloud, Spotify...)
+      const resolve = await client.riffy.resolve({ query: query, requester: message.author });
+      const { loadType, tracks, playlistInfo } = resolve;
+
+      if (loadType === 'playlist') {
+        for (const track of tracks) {
+          track.info.requester = message.author;
+          player.queue.add(track);
+        }
+        await replyMsg.edit(`✅ Đã thêm danh sách phát **${playlistInfo.name}** (${tracks.length} bài hát) vào danh sách chờ!`);
+        if (!player.playing && !player.paused) return player.play();
+      } 
+      else if (loadType === 'search' || loadType === 'track') {
+        const track = tracks.shift();
+        track.info.requester = message.author;
+        player.queue.add(track);
+        await replyMsg.edit(`✅ Đã thêm vào hàng chờ: \`${track.info.title}\``);
+        if (!player.playing && !player.paused) return player.play();
+      } 
+      else {
+        player.destroy();
+        return replyMsg.edit('❌ Không tìm thấy bài hát hoặc liên kết không hợp lệ!');
       }
-
-      player.play(resource);
-      connection.subscribe(player);
-
-      queue.set(message.guild.id, {
-        connection,
-        player,
-        requesterId: message.author.id,
-        title,
-        url: query
-      });
-
-      player.on(AudioPlayerStatus.Idle, () => {
-        connection.destroy();
-        queue.delete(message.guild.id);
-      });
-
-      const embed = new EmbedBuilder()
-        .setColor(0x00FF00)
-        .setTitle('🎵 BẮT ĐẦU PHÁT NHẠC')
-        .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** <@${message.author.id}>`)
-        .setFooter({ text: 'Chỉ người yêu cầu hoặc Admin mới có quyền sử dụng m!leave' })
-        .setTimestamp();
-
-      await replyMsg.edit({ content: null, embeds: [embed] });
 
     } catch (error) {
       console.error(error);
-      await replyMsg.edit(`❌ Thất bại khi giải mã luồng phát: ${error.message}`);
+      await replyMsg.edit(`❌ Gặp sự cố kết nối Lavalink: ${error.message}`);
     }
   }
 
   // ============ LỆNH m!leave ============
   if (command === 'leave' || command === 'stop') {
-    const serverQueue = queue.get(message.guild.id);
-    const connection = getVoiceConnection(message.guild.id);
+    const player = client.riffy.players.get(message.guild.id);
 
-    if (!connection && !serverQueue) {
-      return message.reply('❌ Bot hiện tại không có trong phòng thoại hoặc đang không phát nhạc!');
+    if (!player) {
+      return message.reply('❌ Bot hiện tại đang không kết nối phòng thoại hoặc đang không phát nhạc!');
     }
 
-    const requesterId = serverQueue ? serverQueue.requesterId : null;
+    const requesterId = player.requesterId;
     const isAdmin = message.member.permissions.has(PermissionFlagsBits.Administrator);
 
     if (requesterId && message.author.id !== requesterId && !isAdmin) {
-      return message.reply(`❌ Chỉ có **người phát bài hát hiện tại** (<@${requesterId}>) hoặc **Quản trị viên** mới được quyền dừng nhạc!`);
+      return message.reply(`❌ Chỉ có **người yêu cầu phát nhạc** (<@${requesterId}>) hoặc **Quản trị viên** mới được quyền dừng nhạc!`);
     }
 
-    if (serverQueue) {
-      serverQueue.player.stop();
+    if (player) {
+      player.stop();
       queue.delete(message.guild.id);
     }
-    connection.destroy();
-
-    await message.reply('👋 Đã dừng nhạc và rời khỏi phòng voice theo yêu cầu.');
+    player.destroy();
+    await message.reply('👋 Đã dừng phát nhạc và rời khỏi phòng voice theo yêu cầu.');
   }
 });
 
