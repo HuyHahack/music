@@ -58,12 +58,13 @@ client.riffy = new Riffy(client, nodes, {
   }
 });
 
-// Bộ đệm quản lý các trình phát nhạc cục bộ (Local Player)
+// Bộ nhóm đệm quản lý các trình phát nhạc cục bộ (Local Player) bằng thư viện @discordjs/voice
 const localPlayers = new Map(); // Key: guildId, Value: { connection, player, requesterId, title, ffmpeg }
 
-// Các bộ nhớ đệm quản lý tìm kiếm và chống spam lệnh
-const playCooldowns = new Map();
-const tempSearchTracks = new Map(); // Lưu tạm kết quả tìm kiếm (Key: userId)
+// Khai báo đầy đủ các bộ nhớ đệm quản lý chống spam lệnh và tìm kiếm bài hát [1.2.5]
+const playCooldowns = new Map();      // Giới hạn thời gian chờ riêng cho lệnh phát nhạc (10 giây)
+const globalCooldowns = new Map();    // Giới hạn thời gian chờ toàn cục cho mọi lệnh (3 giây)
+const tempSearchTracks = new Map();   // Lưu tạm kết quả tìm kiếm (Key: userId)
 
 // Hàm hỗ trợ chuyển đổi mili-giây sang định dạng MM:SS
 function formatTime(ms) {
@@ -74,7 +75,7 @@ function formatTime(ms) {
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 }
 
-// Hàm hỗ trợ vẽ Thanh tiến trình thời gian thực (Progress Bar) [1.2.7]
+// Hàm hỗ trợ vẽ Thanh tiến trình thời gian thực (Progress Bar)
 function createProgressBar(position, duration, size = 15) {
   if (isNaN(position) || isNaN(duration)) return '🔘' + '▬'.repeat(size) + ' [00:00 / 00:00]';
   if (position > duration) position = duration;
@@ -117,7 +118,7 @@ client.once('ready', () => {
   console.log(`\n🎵 Bot phát nhạc Lai Đám Mây (Hybrid) đã trực tuyến: ${client.user.tag}`);
 });
 
-// Sự kiện: Bắt đầu phát bài nhạc mới (Nâng cấp tích hợp tự động cập nhật thanh thời gian thực) [1.2.7]
+// Sự kiện: Bắt đầu phát bài nhạc mới
 client.riffy.on("trackStart", async (player, track) => {
   const channel = client.channels.cache.get(player.textChannel);
   if (channel) {
@@ -133,10 +134,9 @@ client.riffy.on("trackStart", async (player, track) => {
     const msg = await channel.send({ embeds: [embed] }).catch(() => null);
 
     if (msg) {
-      // Hủy bộ đếm thời gian cũ nếu còn sót lại [1.2.5]
       if (player.progressInterval) clearInterval(player.progressInterval);
 
-      // Thiết lập bộ đếm tự động cập nhật (Edit) lại embed thanh thời gian sau mỗi 10 giây
+      // Thiết lập bộ đếm tự động cập nhật lại embed thanh thời gian sau mỗi 10 giây
       player.progressInterval = setInterval(async () => {
         const activePlayer = client.riffy.players.get(player.guildId);
         if (!activePlayer || !activePlayer.playing || !activePlayer.current) {
@@ -157,12 +157,21 @@ client.riffy.on("trackStart", async (player, track) => {
 
 // Sự kiện: Hết danh sách chờ nhạc của Lavalink
 client.riffy.on("queueEnd", async (player) => {
-  if (player.progressInterval) clearInterval(player.progressInterval); // Giải phóng bộ đếm thời gian [1.2.5]
+  if (player.progressInterval) clearInterval(player.progressInterval);
   const channel = client.channels.cache.get(player.textChannel);
   player.destroy();
   if (channel) {
     channel.send("👋 Danh sách phát đã kết thúc. Bot đã rời phòng thoại.").catch(() => {});
   }
+});
+
+// Sự kiện: Đăng ký bắt lỗi luồng phát Lavalink tránh sập Bot
+client.riffy.on("playerError", (player, track, error) => {
+  console.error(`❌ Lỗi luồng phát tại Server ${player.guildId}:`, error.message);
+});
+
+client.riffy.on("nodeError", (node, error) => {
+  console.error(`❌ Lỗi máy chủ Lavalink "${node.name}":`, error.message);
 });
 
 // Trích xuất dữ liệu Gateway cập nhật Voice State cho Lavalink
@@ -270,7 +279,19 @@ client.on('messageCreate', async (message) => {
       return message.reply('❌ Bot không có quyền truy cập hoặc nói chuyện trong phòng voice của bạn!');
     }
 
-    // Kích hoạt hiệu ứng đang gõ chữ kín đáo của Discord [1.2.6]
+    // Cooldown riêng cho lệnh phát nhạc (10 giây)
+    const playCooldownAmount = 10000;
+    if (playCooldowns.has(userId)) {
+      const expirationTime = playCooldowns.get(userId) + playCooldownAmount;
+      if (now < expirationTime) {
+        const timeLeft = ((expirationTime - now) / 1000).toFixed(1);
+        return message.reply(`⚠️ Bạn đang thao tác tìm kiếm nhạc quá nhanh! Vui lòng đợi **${timeLeft} giây**.`);
+      }
+    }
+    playCooldowns.set(userId, now);
+    setTimeout(() => playCooldowns.delete(userId), playCooldownAmount);
+
+    // Kích hoạt hiệu ứng đang gõ chữ kín đáo của Discord
     await message.channel.sendTyping().catch(() => {});
 
     try {
@@ -307,7 +328,7 @@ client.on('messageCreate', async (message) => {
         return message.reply('❌ Không tìm thấy bài hát hoặc lỗi kết nối máy chủ giải mã!');
       }
 
-      const { loadType, tracks } = resolve;
+      const { loadType, tracks, playlistInfo } = resolve;
 
       // ---------------- PHÂN LOẠI A: PLAYLIST DANH SÁCH ----------------
       if (loadType === 'playlist') {
@@ -327,7 +348,7 @@ client.on('messageCreate', async (message) => {
             return player.play();
           } else {
             // Đã có bài đang phát dở -> Tự động xếp hàng chờ
-            return message.reply(`✅ Đã thêm danh sách phát **${resolve.playlistInfo.name}** (${tracks.length} bài) vào hàng chờ!`);
+            return message.reply(`✅ Đã thêm danh sách phát **${playlistInfo.name}** (${tracks.length} bài) vào hàng chờ!`);
           }
         } else {
           player.destroy();
@@ -413,7 +434,7 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // ============ LỆNH m!leave ============
+  // ============ LỆNH m!leave (Tắt nhạc & Rời phòng) ============
   if (command === 'leave' || command === 'stop') {
     const player = getActivePlayer(message.guild.id);
 
