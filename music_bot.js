@@ -1,8 +1,9 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, getVoiceConnection } = require('@discordjs/voice');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, getVoiceConnection, StreamType } = require('@discordjs/voice');
 const { Riffy } = require('riffy');
 const play = require('play-dl');
 const express = require('express');
+const { spawn } = require('child_process'); // Sử dụng spawn để điều phối luồng FFmpeg
 const execAsync = require('util').promisify(require('child_process').exec);
 require('dotenv/config');
 
@@ -55,13 +56,13 @@ client.riffy = new Riffy(client, nodes, {
 const playCooldowns = new Map();
 
 // Bộ nhóm đệm quản lý các trình phát nhạc cục bộ (Local Player) bằng thư viện @discordjs/voice
-const localPlayers = new Map(); // Key: guildId, Value: { connection, player, requesterId, title }
+const localPlayers = new Map(); // Key: guildId, Value: { connection, player, requesterId, title, ffmpeg }
 
-// Hàm trích xuất liên kết âm thanh trực tiếp tĩnh (Progressive HTTP) bằng yt-dlp
+// Hàm trích xuất liên kết âm thanh trực tiếp bằng yt-dlp
 async function getDirectAudioUrl(url) {
   console.log(`\n[yt-dlp] 🌐 Đang trích xuất Direct URL cho liên kết: ${url}`);
   try {
-    // Ép yt-dlp lấy định dạng progressive HTTP stream (như mp3/aac) thay vì HLS m3u8 để phát nhạc ngay lập tức
+    // Ép yt-dlp lấy định dạng progressive HTTP stream (như mp3/aac) để phát nhạc mượt mà nhất
     const { stdout } = await execAsync(`yt-dlp -f "bestaudio[protocol^=http]/bestaudio" -g "${url}"`);
     const directUrl = stdout.trim().split('\n')[0];
     console.log(`[yt-dlp] ✅ Đã lấy được Direct URL tĩnh thành công.`);
@@ -152,7 +153,7 @@ client.on('messageCreate', async (message) => {
     playCooldowns.set(userId, now);
     setTimeout(() => playCooldowns.delete(userId), cooldownAmount);
 
-    // Kích hoạt hiệu ứng đang gõ chữ kín đáo của Discord
+    // Bật hiệu ứng đang gõ chữ kín đáo của Discord
     await message.channel.sendTyping().catch(() => {});
 
     try {
@@ -179,6 +180,8 @@ client.on('messageCreate', async (message) => {
 
       // --- TRƯỜNG HỢP A: PHÁT NHẠC BẰNG THƯ VIỆN CỤC BỘ (SoundCloud/TikTok...) ---
       if (isLocalEngine && streamUrl) {
+        console.log('[LOCAL] ⚙️ Khởi tạo kết nối phòng voice...');
+        
         // Tắt kết nối của trình phát Lavalink cũ nếu có để tránh tranh chấp cổng voice
         const lavalinkPlayer = client.riffy.players.get(message.guild.id);
         if (lavalinkPlayer) lavalinkPlayer.destroy();
@@ -189,10 +192,30 @@ client.on('messageCreate', async (message) => {
           adapterCreator: message.guild.voiceAdapterCreator,
         });
 
-        const player = createAudioPlayer();
+        // Bẫy lỗi kết nối [1.3.4]
+        connection.on('error', (err) => console.error('[LOCAL CONNECTION ERROR]:', err));
+
+        console.log('[LOCAL] 🚀 Khởi động tiến trình giải mã FFmpeg...');
         
-        // Phát trực tiếp đường dẫn tĩnh, Discord Voice sẽ tự động stream trực tiếp không bị trễ
-        const resource = createAudioResource(streamUrl, { inlineVolume: false });
+        // Khởi động FFmpeg cục bộ để giải mã luồng tĩnh từ URL thô thành dữ liệu s16le [1.1.2]
+        const ffmpegProcess = spawn('ffmpeg', [
+          '-i', streamUrl,
+          '-f', 's16le',
+          '-ar', '48000',
+          '-ac', '2',
+          'pipe:1'
+        ], { stdio: ['ignore', 'pipe', 'ignore'] }); // Bỏ qua stderr để giữ sạch log
+
+        const player = createAudioPlayer();
+        const resource = createAudioResource(ffmpegProcess.stdout, {
+          inputType: StreamType.Raw
+        });
+
+        // Bẫy lỗi trình phát và luồng phát [1.3.4]
+        player.on('error', (err) => console.error('[LOCAL PLAYER ERROR]:', err));
+        if (resource.playStream) {
+          resource.playStream.on('error', (err) => console.error('[LOCAL RESOURCE STREAM ERROR]:', err));
+        }
 
         player.play(resource);
         connection.subscribe(player);
@@ -201,10 +224,13 @@ client.on('messageCreate', async (message) => {
           connection,
           player,
           requesterId: message.author.id,
-          title
+          title,
+          ffmpeg: ffmpegProcess // Lưu trữ tiến trình để kill khi kết thúc bài
         });
 
         player.on(AudioPlayerStatus.Idle, () => {
+          console.log('[LOCAL] 📌 Kết thúc bài hát, tiến hành giải phóng tiến trình FFmpeg...');
+          ffmpegProcess.kill(); // Kill tiến trình FFmpeg tránh rò rỉ RAM trên Render [1.2.5]
           connection.destroy();
           localPlayers.delete(message.guild.id);
         });
@@ -222,6 +248,7 @@ client.on('messageCreate', async (message) => {
       // --- TRƯỜNG HỢP B: PHÁT NHẠC BẰNG TRÌNH PHÁT LAVALINK (YouTube/Spotify) ---
       const localPlayer = localPlayers.get(message.guild.id);
       if (localPlayer) {
+        if (localPlayer.ffmpeg) localPlayer.ffmpeg.kill(); // Giải phóng tiến trình FFmpeg [1.2.5]
         localPlayer.player.stop();
         localPlayer.connection.destroy();
         localPlayers.delete(message.guild.id);
@@ -309,12 +336,16 @@ client.on('messageCreate', async (message) => {
       return message.reply(`❌ Chỉ có **người phát bài hát hiện tại** (<@${requesterId}>) hoặc **Quản trị viên** mới được dừng nhạc!`);
     }
 
-    // Dọn dẹp cả 2 trình phát
+    // Dọn dẹp cả 2 trình phát & Giải phóng tài nguyên FFmpeg
     const lPlayer = client.riffy.players.get(message.guild.id);
     if (lPlayer) lPlayer.destroy();
 
     const localPl = localPlayers.get(message.guild.id);
     if (localPl) {
+      if (localPl.ffmpeg) {
+        console.log('[LOCAL] 📌 Thu hồi tiến trình FFmpeg thông qua m!leave...');
+        localPl.ffmpeg.kill(); // Tránh rò rỉ bộ nhớ [1.2.5]
+      }
       localPl.player.stop();
       localPl.connection.destroy();
       localPlayers.delete(message.guild.id);
@@ -341,7 +372,10 @@ client.on('messageCreate', async (message) => {
     if (player) {
       player.stop();
     } else if (localPl) {
+      if (localPl.ffmpeg) localPl.ffmpeg.kill(); // Hủy tiến trình FFmpeg của bài bị bỏ qua [1.2.5]
       localPl.player.stop();
+      localPl.connection.destroy();
+      localPlayers.delete(message.guild.id);
     }
     await message.reply('⏭️ Đã bỏ qua bài hát hiện tại.');
   }
