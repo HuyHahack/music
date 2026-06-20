@@ -1,8 +1,18 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const { Riffy } = require('riffy');
+const express = require('express'); // Bổ sung Express
 const exec = require('util').promisify(require('child_process').exec);
 require('dotenv/config');
 
+// ============ EXPRESS SERVER (Bổ sung cho Render scan cổng) ============
+const app = express();
+app.use(express.json());
+app.get('/', (req, res) => res.json({ status: 'online' }));
+app.get('/health', (req, res) => res.status(200).send('OK'));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🌐 Web server chạy tại cổng ${PORT}`));
+
+// ============ DISCORD BOT CLIENT ============
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -151,9 +161,15 @@ client.on('messageCreate', async (message) => {
         }
 
         // --- BỘ LỌC CHỜ KẾT NỐI HOÀN TẤT TRƯỚC KHI PHÁT ---
+        const now = Date.now();
+        let connectionReady = false;
+        
+        const inKey = `${interaction.guild.id}_${productType}`;
+        
+        // Hẹn giờ chờ cổng kết nối Voice sẵn sàng
         let attempts = 0;
         while (!player.connected && attempts < 20) {
-          await new Promise(r => setTimeout(r, 500)); // Chờ 500ms mỗi vòng lặp
+          await new Promise(r => setTimeout(r, 500));
           attempts++;
         }
 
@@ -172,7 +188,7 @@ client.on('messageCreate', async (message) => {
         // --- BỘ LỌC CHỜ KẾT NỐI HOÀN TẤT TRƯỚC KHI PHÁT ---
         let attempts = 0;
         while (!player.connected && attempts < 20) {
-          await new Promise(r => setTimeout(r, 500)); // Chờ 500ms mỗi vòng lặp
+          await new Promise(r => setTimeout(r, 500));
           attempts++;
         }
 
@@ -206,16 +222,71 @@ client.on('messageCreate', async (message) => {
       return message.reply(`❌ Chỉ có **người phát bài hát hiện tại** (<@${requesterId}>) hoặc **Quản trị viên** mới được quyền dừng nhạc!`);
     }
 
-    if (player) {
-      player.stop();
-      client.riffy.players.delete(message.guild.id);
+    player.destroy();
+    await message.reply('👋 Đã dừng nhạc và rời khỏi phòng voice theo yêu cầu.');
+  }
+
+  // ============ LỆNH m!skip ============
+  if (command === 'skip' || command === 's') {
+    const player = client.riffy.players.get(message.guild.id);
+    if (!player) return message.reply('❌ Bot hiện tại đang không phát nhạc!');
+
+    const requesterId = player.requesterId;
+    const isAdmin = message.member.permissions.has(PermissionFlagsBits.Administrator);
+
+    if (requesterId && message.author.id !== requesterId && !isAdmin) {
+      return message.reply(`❌ Chỉ có **người phát nhạc** (<@${requesterId}>) hoặc **Quản trị viên** mới được bỏ qua bài!`);
     }
 
-    await message.reply('👋 Đã dừng nhạc và rời khỏi phòng voice theo yêu cầu.');
+    player.stop();
+    await message.reply('⏭️ Đã bỏ qua bài hát hiện tại.');
+  }
+
+  // ============ LỆNH m!pause ============
+  if (command === 'pause') {
+    const player = client.riffy.players.get(message.guild.id);
+    if (!player) return message.reply('❌ Bot hiện tại đang không phát nhạc!');
+    player.pause(true);
+    await message.reply('⏸️ Đã tạm dừng phát nhạc.');
+  }
+
+  // ============ LỆNH m!resume ============
+  if (command === 'resume') {
+    const player = client.riffy.players.get(message.guild.id);
+    if (!player) return message.reply('❌ Bot hiện tại đang không phát nhạc!');
+    player.pause(false);
+    await message.reply('▶️ Tiếp tục phát nhạc.');
+  }
+
+  // ============ LỆNH m!queue ============
+  if (command === 'queue' || command === 'q') {
+    const player = client.riffy.players.get(message.guild.id);
+    if (!player || player.queue.length === 0) return message.reply('❌ Danh sách hàng chờ hiện tại đang trống!');
+
+    const queueList = player.queue.map((track, index) => `**#${index + 1}** | \`${track.info.title}\``).slice(0, 10).join('\n');
+    const embed = new EmbedBuilder()
+      .setColor(0x00FF00)
+      .setTitle('📋 DANH SÁCH CHỜ PHÁT (Tối đa 10 bài)')
+      .setDescription(queueList)
+      .setTimestamp();
+
+    await message.reply({ embeds: [embed] });
+  }
+
+  // ============ LỆNH m!volume ============
+  if (command === 'volume' || command === 'vol') {
+    const player = client.riffy.players.get(message.guild.id);
+    if (!player) return message.reply('❌ Bot hiện tại đang không phát nhạc!');
+
+    const vol = parseInt(args[0]);
+    if (isNaN(vol) || vol < 1 || vol > 100) return message.reply('❌ Âm lượng hợp lệ phải nằm trong khoảng từ 1 đến 100!');
+
+    player.setVolume(vol);
+    await message.reply(`🔊 Đã thiết lập âm lượng thành: **${vol}%**`);
   }
 });
 
-// TRÌNH BẮT LỖI TOÀN CỤC CHỐNG SẬP BOT TRÊN RENDER
+// TRÌNH BẮT LỖI TOÀN CỤC CHỐNG SẬP BOT
 process.on('unhandledRejection', (error) => console.error('Unhandled rejection:', error));
 process.on('uncaughtException', (error) => console.error('Uncaught exception:', error));
 
