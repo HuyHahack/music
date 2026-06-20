@@ -3,7 +3,7 @@ const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerSta
 const { Riffy } = require('riffy');
 const play = require('play-dl');
 const express = require('express');
-const { spawn } = require('child_process'); // Sử dụng spawn để điều phối luồng FFmpeg
+const { spawn } = require('child_process');
 const execAsync = require('util').promisify(require('child_process').exec);
 require('dotenv/config');
 
@@ -167,7 +167,6 @@ client.on('messageCreate', async (message) => {
       const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
 
       if (isUrl && !isYouTube) {
-        // TẤT CẢ các liên kết ngoài (SoundCloud, TikTok, Facebook...) đều trích xuất link tĩnh trực tiếp [5]
         const directUrl = await getDirectAudioUrl(query);
         if (directUrl) {
           streamUrl = directUrl;
@@ -192,29 +191,45 @@ client.on('messageCreate', async (message) => {
           adapterCreator: message.guild.voiceAdapterCreator,
         });
 
-        // Bẫy lỗi kết nối [1.3.4]
-        connection.on('error', (err) => console.error('[LOCAL CONNECTION ERROR]:', err));
+        // Theo dõi trạng thái kết nối phòng thoại của thư viện cục bộ [1.3.4]
+        connection.on('stateChange', (oldState, newState) => {
+          console.log(`[LOCAL CONNECTION] 📊 Trạng thái kết nối đổi từ [${oldState.status}] sang [${newState.status}]`);
+        });
 
-        console.log('[LOCAL] 🚀 Khởi động tiến trình giải mã FFmpeg...');
+        connection.on('error', (err) => console.error('[LOCAL CONNECTION ERROR] ❌:', err));
+
+        console.log('[LOCAL] 🚀 Khởi động tiến trình giải mã FFmpeg kèm giả lập trình duyệt...');
         
-        // Khởi động FFmpeg cục bộ để giải mã luồng tĩnh từ URL thô thành dữ liệu s16le [1.1.2]
+        // Khởi động FFmpeg để giải mã luồng tĩnh từ URL thô thành dữ liệu s16le [1.1.2]
+        // Bổ sung tham số -user_agent để vượt qua tường lửa chặn IP của SoundCloud/TikTok [1.1.1]
         const ffmpegProcess = spawn('ffmpeg', [
+          '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
           '-i', streamUrl,
           '-f', 's16le',
           '-ar', '48000',
           '-ac', '2',
           'pipe:1'
-        ], { stdio: ['ignore', 'pipe', 'ignore'] }); // Bỏ qua stderr để giữ sạch log
+        ], { stdio: ['ignore', 'pipe', 'pipe'] }); // Chuyển đổi stderr sang dạng ghi log [1.3.4]
+
+        // Bẫy lỗi và in chi tiết báo cáo hoạt động thực tế của FFmpeg ra terminal của Render
+        ffmpegProcess.stderr.on('data', (data) => {
+          console.log(`[FFmpeg Log]: ${data.toString().trim()}`);
+        });
 
         const player = createAudioPlayer();
         const resource = createAudioResource(ffmpegProcess.stdout, {
           inputType: StreamType.Raw
         });
 
+        // Theo dõi sự biến đổi trạng thái của trình phát nhạc (Ví dụ: Buffering -> Playing) [1.3.4]
+        player.on('stateChange', (oldState, newState) => {
+          console.log(`[LOCAL PLAYER] 📊 Trạng thái phát đổi từ [${oldState.status}] sang [${newState.status}]`);
+        });
+
         // Bẫy lỗi trình phát và luồng phát [1.3.4]
-        player.on('error', (err) => console.error('[LOCAL PLAYER ERROR]:', err));
+        player.on('error', (err) => console.error('[LOCAL PLAYER ERROR] ❌:', err));
         if (resource.playStream) {
-          resource.playStream.on('error', (err) => console.error('[LOCAL RESOURCE STREAM ERROR]:', err));
+          resource.playStream.on('error', (err) => console.error('[LOCAL RESOURCE STREAM ERROR] ❌:', err));
         }
 
         player.play(resource);
@@ -248,7 +263,6 @@ client.on('messageCreate', async (message) => {
       // --- TRƯỜNG HỢP B: PHÁT NHẠC BẰNG TRÌNH PHÁT LAVALINK (YouTube/Spotify) ---
       const localPlayer = localPlayers.get(message.guild.id);
       if (localPlayer) {
-        if (localPlayer.ffmpeg) localPlayer.ffmpeg.kill(); // Giải phóng tiến trình FFmpeg [1.2.5]
         localPlayer.player.stop();
         localPlayer.connection.destroy();
         localPlayers.delete(message.guild.id);
@@ -320,7 +334,7 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // ============ LỆNH m!leave (Tắt nhạc & Rời phòng) ============
+  // ============ LỆNH m!leave ============
   if (command === 'leave' || command === 'stop') {
     const player = getActivePlayer(message.guild.id);
     const connection = getVoiceConnection(message.guild.id);
@@ -336,16 +350,13 @@ client.on('messageCreate', async (message) => {
       return message.reply(`❌ Chỉ có **người phát bài hát hiện tại** (<@${requesterId}>) hoặc **Quản trị viên** mới được dừng nhạc!`);
     }
 
-    // Dọn dẹp cả 2 trình phát & Giải phóng tài nguyên FFmpeg
+    // Dọn dẹp cả 2 trình phát
     const lPlayer = client.riffy.players.get(message.guild.id);
     if (lPlayer) lPlayer.destroy();
 
     const localPl = localPlayers.get(message.guild.id);
     if (localPl) {
-      if (localPl.ffmpeg) {
-        console.log('[LOCAL] 📌 Thu hồi tiến trình FFmpeg thông qua m!leave...');
-        localPl.ffmpeg.kill(); // Tránh rò rỉ bộ nhớ [1.2.5]
-      }
+      if (localPl.ffmpeg) localPl.ffmpeg.kill(); // Tắt tiến trình FFmpeg để giải phóng tài nguyên
       localPl.player.stop();
       localPl.connection.destroy();
       localPlayers.delete(message.guild.id);
@@ -372,10 +383,8 @@ client.on('messageCreate', async (message) => {
     if (player) {
       player.stop();
     } else if (localPl) {
-      if (localPl.ffmpeg) localPl.ffmpeg.kill(); // Hủy tiến trình FFmpeg của bài bị bỏ qua [1.2.5]
+      if (localPl.ffmpeg) localPl.ffmpeg.kill();
       localPl.player.stop();
-      localPl.connection.destroy();
-      localPlayers.delete(message.guild.id);
     }
     await message.reply('⏭️ Đã bỏ qua bài hát hiện tại.');
   }
