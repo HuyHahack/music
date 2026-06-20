@@ -3,7 +3,7 @@ const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerSta
 const { Riffy } = require('riffy');
 const play = require('play-dl');
 const express = require('express');
-const execAsync = require('util').promisify(require('child_process').exec); // Sử dụng exec để lấy URL tĩnh [1.2.7]
+const execAsync = require('util').promisify(require('child_process').exec);
 require('dotenv/config');
 
 // ============ EXPRESS SERVER (Bảo đảm Render scan cổng thành công) ============
@@ -32,7 +32,7 @@ const PREFIX = 'm!';
 const nodes = [
   {
     name: "AjieBlogs EU",
-    host: "lava-v4.serenetia.com",
+    host: "lava-v4.ajieblogs.eu.org",
     port: 443,
     password: "https://dsc.gg/ajidevserver",
     secure: true
@@ -57,13 +57,14 @@ const playCooldowns = new Map();
 // Bộ nhóm đệm quản lý các trình phát nhạc cục bộ (Local Player) bằng thư viện @discordjs/voice
 const localPlayers = new Map(); // Key: guildId, Value: { connection, player, requesterId, title }
 
-// Hàm trích xuất liên kết âm thanh trực tiếp (Direct URL) bằng yt-dlp [1.2.7]
+// Hàm trích xuất liên kết âm thanh trực tiếp tĩnh (Progressive HTTP) bằng yt-dlp
 async function getDirectAudioUrl(url) {
   console.log(`\n[yt-dlp] 🌐 Đang trích xuất Direct URL cho liên kết: ${url}`);
   try {
-    const { stdout } = await execAsync(`yt-dlp -g "${url}"`);
+    // Ép yt-dlp lấy định dạng progressive HTTP stream (như mp3/aac) thay vì HLS m3u8 để phát nhạc ngay lập tức
+    const { stdout } = await execAsync(`yt-dlp -f "bestaudio[protocol^=http]/bestaudio" -g "${url}"`);
     const directUrl = stdout.trim().split('\n')[0];
-    console.log(`[yt-dlp] ✅ Đã lấy được Direct URL thành công.`);
+    console.log(`[yt-dlp] ✅ Đã lấy được Direct URL tĩnh thành công.`);
     return directUrl;
   } catch (err) {
     console.error('⚠️ Lỗi trích xuất yt-dlp:', err.message);
@@ -151,7 +152,7 @@ client.on('messageCreate', async (message) => {
     playCooldowns.set(userId, now);
     setTimeout(() => playCooldowns.delete(userId), cooldownAmount);
 
-    // Bật hiệu ứng đang gõ chữ kín đáo của Discord
+    // Kích hoạt hiệu ứng đang gõ chữ kín đáo của Discord
     await message.channel.sendTyping().catch(() => {});
 
     try {
@@ -165,7 +166,7 @@ client.on('messageCreate', async (message) => {
       const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
 
       if (isUrl && !isYouTube) {
-        // TẤT CẢ các liên kết ngoài (SoundCloud, TikTok, Facebook...) đều trích xuất link thô trực tiếp [5]
+        // TẤT CẢ các liên kết ngoài (SoundCloud, TikTok, Facebook...) đều trích xuất link tĩnh trực tiếp [5]
         const directUrl = await getDirectAudioUrl(query);
         if (directUrl) {
           streamUrl = directUrl;
@@ -190,7 +191,7 @@ client.on('messageCreate', async (message) => {
 
         const player = createAudioPlayer();
         
-        // Phát trực tiếp đường dẫn thô, Discord Voice sẽ tự động tải trực tiếp từ CDN của trang nguồn! [1.1.2]
+        // Phát trực tiếp đường dẫn tĩnh, Discord Voice sẽ tự động stream trực tiếp không bị trễ
         const resource = createAudioResource(streamUrl, { inlineVolume: false });
 
         player.play(resource);
