@@ -1,7 +1,5 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, getVoiceConnection } = require('@discordjs/voice');
 const { Riffy } = require('riffy');
-const play = require('play-dl');
 const express = require('express');
 const execAsync = require('util').promisify(require('child_process').exec);
 require('dotenv/config');
@@ -28,8 +26,15 @@ const client = new Client({
 
 const PREFIX = 'm!';
 
-// Cấu hình cụm máy chủ Lavalink v4 công cộng cho YouTube & SoundCloud (Tự động Load Balancing)
+// Cấu hình cụm máy chủ Lavalink v4 công cộng cho YouTube & SoundCloud (Tự động Load Balancing) [2.2.1]
 const nodes = [
+  {
+    name: "HeavenCloud IN",
+    host: "89.106.84.59",
+    port: 4000,
+    password: "heavencloud.in",
+    secure: false
+  },
   {
     name: "AjieBlogs EU",
     host: "lava-v4.ajieblogs.eu.org",
@@ -58,12 +63,11 @@ client.riffy = new Riffy(client, nodes, {
   }
 });
 
-// Bộ nhóm đệm quản lý các trình phát nhạc cục bộ (Local Player) bằng thư viện @discordjs/voice
-const localPlayers = new Map(); // Key: guildId, Value: { connection, player, requesterId, title, ffmpeg }
+// Bộ đếm thời gian chờ tránh spam tất cả các lệnh m! (Cooldown 3 giây)
+const globalCooldowns = new Map();
 
-// Khai báo đầy đủ các bộ nhớ đệm quản lý chống spam lệnh và tìm kiếm bài hát [1.2.5]
+// Khai báo đầy đủ các bộ nhớ đệm quản lý chống spam lệnh và tìm kiếm bài hát
 const playCooldowns = new Map();      // Giới hạn thời gian chờ riêng cho lệnh phát nhạc (10 giây)
-const globalCooldowns = new Map();    // Giới hạn thời gian chờ toàn cục cho mọi lệnh (3 giây)
 const tempSearchTracks = new Map();   // Lưu tạm kết quả tìm kiếm (Key: userId)
 
 // Hàm hỗ trợ chuyển đổi mili-giây sang định dạng MM:SS
@@ -300,10 +304,11 @@ client.on('messageCreate', async (message) => {
       // Nhận diện liên kết để phân phối luồng phát phù hợp
       const isUrl = query.startsWith('http://') || query.startsWith('https://');
       const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
-      const isSpotify = isUrl && query.includes('spotify.com');
+      const isSoundCloud = isUrl && query.includes('soundcloud.com'); // Nhận diện SoundCloud gốc
+      const isSpotify = isUrl && query.includes('spotify.com');       // Nhận diện Spotify gốc
 
-      // Cho phép SoundCloud chạy qua yt-dlp để lấy link direct .mp3 bypass Lavalink block
-      if (isUrl && !isYouTube && !isSpotify) {
+      // CHỈ dùng yt-dlp cho các liên kết ngoài thực sự (như TikTok, Facebook...) không được Lavalink hỗ trợ mặc định [5]
+      if (isUrl && !isYouTube && !isSoundCloud && !isSpotify) {
         const directUrl = await getDirectAudioUrl(query);
         if (directUrl) {
           finalQuery = directUrl; // Gửi link âm thanh tĩnh này cho Lavalink giải mã từ xa!
@@ -355,52 +360,7 @@ client.on('messageCreate', async (message) => {
           return message.reply('❌ Kết nối tới phòng thoại thất bại do đường truyền Discord quá tải!');
         }
       } 
-      // ---------------- PHÂN LOẠI B: TÌM KIẾM TRÊN YOUTUBE MUSIC (KÍCH HOẠT SELECT MENU) ----------------
-      else if (loadType === 'search') {
-        const topTracks = tracks.slice(0, 5); // Lấy 5 kết quả tốt nhất
-
-        // Xây dựng Menu lựa chọn
-        const selectMenu = new StringSelectMenuBuilder()
-          .setCustomId('search_select')
-          .setPlaceholder('🛒 | Chọn bài hát bạn muốn phát...')
-          .addOptions(
-            topTracks.map((t, index) => 
-              new StringSelectMenuOptionBuilder()
-                .setLabel(`${index + 1}. ${t.info.title.slice(0, 80)}`)
-                .setDescription(`Tác giả: ${t.info.author.slice(0, 40)} | Thời lượng: ${formatTime(t.info.length)}`)
-                .setValue(`${index}`)
-            )
-          );
-
-        const row = new ActionRowBuilder().addComponents(selectMenu);
-
-        const embed = new EmbedBuilder()
-          .setColor(0x00FF00)
-          .setTitle('🔍 KẾT QUẢ TÌM KIẾM')
-          .setDescription(topTracks.map((t, index) => `**${index + 1}.** \`${t.info.title}\` - *${t.info.author}*`).join('\n'))
-          .setFooter({ text: 'Chọn bài hát bên dưới để phát. Bảng chọn tự hủy sau 1 phút.' })
-          .setTimestamp();
-
-        const searchMsg = await message.reply({ embeds: [embed], components: [row] });
-
-        // Lưu thông tin tạm thời vào Map để xử lý tương tác click
-        tempSearchTracks.set(message.author.id, {
-          tracks: topTracks,
-          voiceChannelId: voiceChannel.id,
-          textChannelId: message.channel.id,
-          searchMsgId: searchMsg.id
-        });
-
-        // Tự động xóa bảng chọn sau 1 phút nếu không có ai tương tác
-        setTimeout(() => {
-          if (tempSearchTracks.has(message.author.id)) {
-            tempSearchTracks.delete(message.author.id);
-            searchMsg.delete().catch(() => {});
-          }
-        }, 60000);
-      }
-      // ---------------- PHÂN LOẠI C: PHÁT TRỰC TIẾP LINK DUY NHẤT ----------------
-      else if (loadType === 'track') {
+      else if (loadType === 'search' || loadType === 'track') {
         const track = tracks.shift();
         track.info.requester = message.author;
         player.queue.add(track);
@@ -415,7 +375,7 @@ client.on('messageCreate', async (message) => {
           if (!player.playing && !player.paused) {
             return player.play();
           } else {
-            // Đã có bài đang phát dở -> Tự động xếp hàng chờ
+            // Đã có bài đang phát dở -> Tự động xếp hàng chờ và thông báo
             return message.reply(`✅ Đã thêm vào hàng chờ: \`${track.info.title}\``);
           }
         } else {
@@ -449,7 +409,7 @@ client.on('messageCreate', async (message) => {
       return message.reply(`❌ Chỉ có **người yêu cầu phát nhạc** (<@${requesterId}>) hoặc **Quản trị viên** mới được dừng nhạc!`);
     }
 
-    if (player.player.progressInterval) clearInterval(player.player.progressInterval); // Hủy bộ đếm thời gian dính [1.2.5]
+    if (player.player.progressInterval) clearInterval(player.player.progressInterval); // Hủy bộ đếm thời gian dính
     player.player.destroy();
     await message.reply('👋 Đã dừng nhạc và rời khỏi phòng voice theo yêu cầu.');
   }
