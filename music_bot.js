@@ -1,6 +1,7 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 const { Riffy } = require('riffy');
 const express = require('express');
+const execAsync = require('util').promisify(require('child_process').exec);
 require('dotenv/config');
 
 // ============ EXPRESS SERVER ============
@@ -25,13 +26,27 @@ const client = new Client({
 
 const PREFIX = 'm!';
 
-// Cấu hình duy nhất máy chủ NYX Singapore Node 1 theo yêu cầu của bạn [2.2.1]
+// Cấu hình cụm máy chủ Lavalink v4 công cộng cho YouTube & SoundCloud (Tự động Load Balancing) [2.2.1]
 const nodes = [
   {
     name: "NYX Singapore Node 1",
     host: "sg1-nodelink.nyxbot.app",
     port: 3000,
     password: "nyxbot.app/support",
+    secure: false
+  },
+  {
+    name: "Jirayu Net",
+    host: "lavalink.jirayu.net",
+    port: 443,
+    password: "jfish",
+    secure: true
+  },
+  {
+    name: "HeavenCloud IN",
+    host: "89.106.84.59",
+    port: 4000,
+    password: "heavencloud.in",
     secure: false
   }
 ];
@@ -79,6 +94,20 @@ function createProgressBar(position, duration, size = 15) {
   return `${bar} [${formatTime(position)} / ${formatTime(duration)}]`;
 }
 
+// Hàm trích xuất liên kết âm thanh trực tiếp bằng yt-dlp cho các nền tảng ngoài (TikTok, Facebook...)
+async function getDirectAudioUrl(url) {
+  console.log(`\n[yt-dlp] 🌐 Đang trích xuất Direct URL cho liên kết: ${url}`);
+  try {
+    const { stdout } = await execAsync(`yt-dlp -f "bestaudio[protocol^=http]/bestaudio" -g "${url}"`);
+    const directUrl = stdout.trim().split('\n')[0];
+    console.log(`[yt-dlp] ✅ Đã lấy được Direct URL tĩnh thành công.`);
+    return directUrl;
+  } catch (err) {
+    console.error('⚠️ Lỗi trích xuất yt-dlp:', err.message);
+    return null;
+  }
+}
+
 // Hàm giám sát thông minh tự động phát hiện trình phát nhạc đang hoạt động trên Server
 function getActivePlayer(guildId) {
   const lavalinkPlayer = client.riffy.players.get(guildId);
@@ -97,10 +126,13 @@ client.once('ready', () => {
 client.riffy.on("trackStart", async (player, track) => {
   const channel = client.channels.cache.get(player.textChannel);
   if (channel) {
+    const title = track.info.title.startsWith('http') ? 'Liên kết ngoài / SoundCloud' : track.info.title;
+    const requesterMention = track.info.requester?.id ? `<@${track.info.requester.id}>` : 'Không rõ';
+
     const embed = new EmbedBuilder()
       .setColor(0x00FF00)
       .setTitle('🎵 Đang phát nhạc')
-      .setDescription(`**Tác phẩm:** \`${track.info.title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>\n\n${createProgressBar(0, track.info.length)}`)
+      .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** ${requesterMention}\n\n${createProgressBar(0, track.info.length)}`)
       .setFooter({ text: 'Chỉ người yêu cầu hoặc Admin mới có quyền sử dụng m!leave' })
       .setTimestamp();
 
@@ -118,7 +150,7 @@ client.riffy.on("trackStart", async (player, track) => {
         }
 
         const updatedEmbed = EmbedBuilder.from(embed)
-          .setDescription(`**Tác phẩm:** \`${track.info.title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>\n\n${createProgressBar(activePlayer.position, track.info.length)}`);
+          .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** ${requesterMention}\n\n${createProgressBar(activePlayer.position, track.info.length)}`);
 
         await msg.edit({ embeds: [updatedEmbed] }).catch(() => {
           clearInterval(player.progressInterval);
@@ -187,13 +219,19 @@ client.on('interactionCreate', async (interaction) => {
     const selectedIndex = parseInt(interaction.values[0]);
     const chosenTrack = searchData.tracks[selectedIndex];
 
-    // Khởi tạo/Lấy player Lavalink
-    const player = client.riffy.createConnection({
-      guildId: interaction.guild.id,
-      voiceChannel: searchData.voiceChannelId,
-      textChannel: searchData.textChannelId,
-      deaf: true
-    });
+    // FIX LỖI: Lấy player hiện hữu trước, tránh gọi createConnection liên tiếp gây mất đồng bộ Voice State
+    let player = client.riffy.players.get(interaction.guild.id);
+    if (!player) {
+      player = client.riffy.createConnection({
+        guildId: interaction.guild.id,
+        voiceChannel: searchData.voiceChannelId,
+        textChannel: searchData.textChannelId,
+        deaf: true
+      });
+    }
+
+    // LOG THÔNG TIN NODE ĐANG ĐƯỢC CHỌN [1.3.4, 2.2.1]
+    console.log("[NODE]", player.node?.name);
 
     player.requesterId = userId;
     chosenTrack.info.requester = interaction.user;
@@ -295,20 +333,35 @@ client.on('messageCreate', async (message) => {
     await message.channel.sendTyping().catch(() => {});
 
     try {
-      // Đã gạt bỏ hoàn toàn bộ giải mã yt-dlp theo yêu cầu [5]
-      const finalQuery = query;
+      let finalQuery = query;
+
+      // Nhận diện liên kết để phân phối luồng phát phù hợp
+      const isUrl = query.startsWith('http://') || query.startsWith('https://');
+      const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
+      const isSpotify = isUrl && query.includes('spotify.com');
+
+      // SoundCloud bắt buộc chạy qua yt-dlp [5]
+      if (isUrl && !isYouTube && !isSpotify) {
+        const directUrl = await getDirectAudioUrl(query);
+        if (directUrl) {
+          finalQuery = directUrl;
+        }
+      }
 
       // THÊM ĐOẠN LOG ĐỂ THEO DÕI ĐƯỜNG DẪN KHI RESOLVE [1.3.4]
       console.log("[SOURCE URL]", query);
       console.log("[FINAL QUERY]", finalQuery);
 
-      // Khởi tạo và liên kết Player Lavalink
-      const player = client.riffy.createConnection({
-        guildId: message.guild.id,
-        voiceChannel: voiceChannel.id,
-        textChannel: message.channel.id,
-        deaf: true
-      });
+      // FIX LỖI: Lấy player hiện hữu trước, tránh gọi createConnection liên tiếp gây mất đồng bộ Voice State
+      let player = client.riffy.players.get(message.guild.id);
+      if (!player) {
+        player = client.riffy.createConnection({
+          guildId: message.guild.id,
+          voiceChannel: voiceChannel.id,
+          textChannel: message.channel.id,
+          deaf: true
+        });
+      }
 
       // LOG THÔNG TIN NODE ĐANG ĐƯỢC CHỌN [1.3.4, 2.2.1]
       console.log("[NODE]", player.node?.name);
@@ -320,11 +373,16 @@ client.on('messageCreate', async (message) => {
         query: finalQuery,
         requester: message.author
       }).catch(err => {
-        console.error("[RESOLVE ERROR]", err); // Log toàn bộ object lỗi khi resolve thất bại
+        console.error("[LAVALINK RESOLVE FAILED]");
+        console.error({
+          node: player.node?.name,
+          query: finalQuery,
+          error: err
+        });
         return null;
       });
       
-      // LOG KẾT QUẢ RESOLVE ĐẦY ĐỦ VÀ THÔNG SỐ LOADTYPE [1.3.4, 2.2.1]
+      // LOG KẾT QUẢ RESOLVE ĐẦY ĐỦ VÀ THÔNG SỐ LOADTYPE [1.3.4]
       console.log("[RESOLVE]", JSON.stringify(resolve, null, 2));
       console.log("[LOADTYPE]", resolve?.loadType);
       console.log("[TRACK COUNT]", resolve?.tracks?.length);
