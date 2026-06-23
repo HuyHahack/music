@@ -36,15 +36,15 @@ const nodes = [
     secure: false
   },
   {
-    name: "Serenetia v4",
-    host: "lavalinkv4.serenetia.com",
+    name: "AjieBlogs EU",
+    host: "lava-v4.ajieblogs.eu.org",
     port: 443,
     password: "https://dsc.gg/ajidevserver",
     secure: true
   },
   {
-    name: "AjieBlogs EU",
-    host: "lava-v4.ajieblogs.eu.org",
+    name: "Serenetia v4",
+    host: "lavalinkv4.serenetia.com",
     port: 443,
     password: "https://dsc.gg/ajidevserver",
     secure: true
@@ -131,7 +131,7 @@ client.riffy.on("trackStart", async (player, track) => {
     const embed = new EmbedBuilder()
       .setColor(0x00FF00)
       .setTitle('🎵 Đang phát nhạc')
-      .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>`)
+      .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>\n\n${createProgressBar(0, track.info.length)}`)
       .setFooter({ text: 'Chỉ người yêu cầu hoặc Admin mới có quyền sử dụng m!leave' })
       .setTimestamp();
 
@@ -314,6 +314,8 @@ client.on('messageCreate', async (message) => {
           finalQuery = directUrl; // Gửi link âm thanh tĩnh này cho Lavalink giải mã từ xa!
         }
       }
+
+      console.log("[LAVALINK QUERY]:", finalQuery);
 
       // Khởi tạo và liên kết Player Lavalink
       const player = client.riffy.createConnection({
