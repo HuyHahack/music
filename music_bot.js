@@ -26,7 +26,7 @@ const client = new Client({
 
 const PREFIX = 'm!';
 
-// Cấu hình cụm máy chủ Lavalink v4 công cộng cho YouTube & SoundCloud (Đã thêm node Jirayu Net ưu tiên) [2.2.1]
+// Cấu hình cụm máy chủ Lavalink v4 công cộng (Đặt máy chủ Jirayu Net lên ưu tiên số 1) [2.2.1]
 const nodes = [
   {
     name: "Jirayu Net",
@@ -126,6 +126,7 @@ client.once('ready', () => {
 client.riffy.on("trackStart", async (player, track) => {
   const channel = client.channels.cache.get(player.textChannel);
   if (channel) {
+    // Nếu là link thô do yt-dlp bypass thì đặt tên mặc định, nếu là nhạc gốc thì giữ tên bài hát của track
     const title = track.info.title.startsWith('http') ? 'Liên kết ngoài / SoundCloud' : track.info.title;
 
     const embed = new EmbedBuilder()
@@ -331,10 +332,11 @@ client.on('messageCreate', async (message) => {
       // Nhận diện liên kết để phân phối luồng phát phù hợp
       const isUrl = query.startsWith('http://') || query.startsWith('https://');
       const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
-      const isSpotify = isUrl && query.includes('spotify.com');
+      const isSoundCloud = isUrl && query.includes('soundcloud.com'); // Nhận diện SoundCloud gốc
+      const isSpotify = isUrl && query.includes('spotify.com');       // Nhận diện Spotify gốc
 
-      // SoundCloud và các liên kết ngoài khác BẮT BUỘC chạy qua yt-dlp [5]
-      if (isUrl && !isYouTube && !isSpotify) {
+      // SỬA ĐỔI ĐIỀU KIỆN THEO YÊU CẦU: SoundCloud bỏ qua yt-dlp, gửi thẳng trực tiếp cho Lavalink! [2.2.7, 5]
+      if (isUrl && !isYouTube && !isSoundCloud && !isSpotify) {
         const directUrl = await getDirectAudioUrl(query);
         if (directUrl) {
           finalQuery = directUrl;
