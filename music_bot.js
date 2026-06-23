@@ -26,21 +26,21 @@ const client = new Client({
 
 const PREFIX = 'm!';
 
-// Cấu hình cụm máy chủ Lavalink v4 công cộng cho YouTube & SoundCloud (Tự động Load Balancing) [2.2.1]
+// Cấu hình cụm máy chủ Lavalink v4 công cộng cho YouTube & SoundCloud (Đã thêm node Jirayu Net ưu tiên) [2.2.1]
 const nodes = [
+  {
+    name: "Jirayu Net",
+    host: "lavalink.jirayu.net",
+    port: 443,
+    password: "jfish",
+    secure: true
+  },
   {
     name: "HeavenCloud IN",
     host: "89.106.84.59",
     port: 4000,
     password: "heavencloud.in",
     secure: false
-  },
-  {
-    name: "AjieBlogs EU",
-    host: "lava-v4.ajieblogs.eu.org",
-    port: 443,
-    password: "https://dsc.gg/ajidevserver",
-    secure: true
   },
   {
     name: "Serenetia v4",
@@ -333,7 +333,7 @@ client.on('messageCreate', async (message) => {
       const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
       const isSpotify = isUrl && query.includes('spotify.com');
 
-      // SỬA ĐỔI ĐIỀU KIỆN THEO YÊU CẦU: SoundCloud bắt buộc phải chạy qua yt-dlp [5]
+      // SoundCloud và các liên kết ngoài khác BẮT BUỘC chạy qua yt-dlp [5]
       if (isUrl && !isYouTube && !isSpotify) {
         const directUrl = await getDirectAudioUrl(query);
         if (directUrl) {
@@ -373,7 +373,7 @@ client.on('messageCreate', async (message) => {
         return null;
       });
       
-      // LOG KẾT QUẢ RESOLVE ĐẦY ĐỦ VÀ THÔNG SỐ LOADTYPE
+      // LOG KẾT QUẢ RESOLVE ĐẦY ĐỦ VÀ THÔNG SỐ LOADTYPE [1.3.4]
       console.log("[RESOLVE]", JSON.stringify(resolve, null, 2));
       console.log("[LOADTYPE]", resolve?.loadType);
       console.log("[TRACK COUNT]", resolve?.tracks?.length);
@@ -505,7 +505,7 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // ============ LỆNH m!leave ============
+  // ============ LỆNH m!leave (Tắt nhạc & Rời phòng) ============
   if (command === 'leave' || command === 'stop') {
     const player = getActivePlayer(message.guild.id);
 
