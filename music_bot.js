@@ -36,15 +36,15 @@ const nodes = [
     secure: false
   },
   {
-    name: "AjieBlogs EU",
-    host: "lava-v4.ajieblogs.eu.org",
+    name: "Serenetia v4",
+    host: "lavalinkv4.serenetia.com",
     port: 443,
     password: "https://dsc.gg/ajidevserver",
     secure: true
   },
   {
-    name: "Serenetia v4",
-    host: "lavalinkv4.serenetia.com",
+    name: "AjieBlogs EU",
+    host: "lava-v4.ajieblogs.eu.org",
     port: 443,
     password: "https://dsc.gg/ajidevserver",
     secure: true
@@ -131,7 +131,7 @@ client.riffy.on("trackStart", async (player, track) => {
     const embed = new EmbedBuilder()
       .setColor(0x00FF00)
       .setTitle('🎵 Đang phát nhạc')
-      .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>\n\n${createProgressBar(0, track.info.length)}`)
+      .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>`)
       .setFooter({ text: 'Chỉ người yêu cầu hoặc Admin mới có quyền sử dụng m!leave' })
       .setTimestamp();
 
@@ -169,7 +169,7 @@ client.riffy.on("queueEnd", async (player) => {
   }
 });
 
-// Sự kiện: Đăng ký bắt lỗi luồng phát Lavalink tránh sập Bot
+// Sự kiện: Đăng ký bắt lỗi luồng phát Lavalink tránh sập Bot [1.3.4, 2.2.1]
 client.riffy.on("playerError", (player, track, error) => {
   console.error(`❌ Lỗi luồng phát tại Server ${player.guildId}:`, error.message);
 });
@@ -325,7 +325,7 @@ client.on('messageCreate', async (message) => {
 
       player.requesterId = message.author.id;
 
-      // Phân tích liên kết nhạc qua Lavalink (Bọc catch để tránh sập bot)
+      // Phân tích liên kết nhạc qua Lavalink (Bọc catch để tránh sập bot) [1.3.4]
       const resolve = await client.riffy.resolve({ query: finalQuery, requester: message.author }).catch(() => null);
       
       if (!resolve || !resolve.tracks || resolve.tracks.length === 0) {
@@ -360,7 +360,52 @@ client.on('messageCreate', async (message) => {
           return message.reply('❌ Kết nối tới phòng thoại thất bại do đường truyền Discord quá tải!');
         }
       } 
-      else if (loadType === 'search' || loadType === 'track') {
+      // ---------------- PHÂN LOẠI B: TÌM KIẾM TRÊN YOUTUBE MUSIC (KÍCH HOẠT SELECT MENU) ----------------
+      else if (loadType === 'search') {
+        const topTracks = tracks.slice(0, 5); // Lấy 5 kết quả tốt nhất
+
+        // Xây dựng Menu lựa chọn
+        const selectMenu = new StringSelectMenuBuilder()
+          .setCustomId('search_select')
+          .setPlaceholder('🛒 | Chọn bài hát bạn muốn phát...')
+          .addOptions(
+            topTracks.map((t, index) => 
+              new StringSelectMenuOptionBuilder()
+                .setLabel(`${index + 1}. ${t.info.title.slice(0, 80)}`)
+                .setDescription(`Tác giả: ${t.info.author.slice(0, 40)} | Thời lượng: ${formatTime(t.info.length)}`)
+                .setValue(`${index}`)
+            )
+          );
+
+        const row = new ActionRowBuilder().addComponents(selectMenu);
+
+        const embed = new EmbedBuilder()
+          .setColor(0x00FF00)
+          .setTitle('🔍 KẾT QUẢ TÌM KIẾM')
+          .setDescription(topTracks.map((t, index) => `**${index + 1}.** \`${t.info.title}\` - *${t.info.author}*`).join('\n'))
+          .setFooter({ text: 'Chọn bài hát bên dưới để phát. Bảng chọn tự hủy sau 1 phút.' })
+          .setTimestamp();
+
+        const searchMsg = await message.reply({ embeds: [embed], components: [row] });
+
+        // Lưu thông tin tạm thời vào Map để xử lý tương tác click
+        tempSearchTracks.set(message.author.id, {
+          tracks: topTracks,
+          voiceChannelId: voiceChannel.id,
+          textChannelId: message.channel.id,
+          searchMsgId: searchMsg.id
+        });
+
+        // Tự động xóa bảng chọn sau 1 phút nếu không có ai tương tác
+        setTimeout(() => {
+          if (tempSearchTracks.has(message.author.id)) {
+            tempSearchTracks.delete(message.author.id);
+            searchMsg.delete().catch(() => {});
+          }
+        }, 60000);
+      }
+      // ---------------- PHÂN LOẠI C: PHÁT TRỰC TIẾP LINK DUY NHẤT ----------------
+      else if (loadType === 'track') {
         const track = tracks.shift();
         track.info.requester = message.author;
         player.queue.add(track);
@@ -375,7 +420,7 @@ client.on('messageCreate', async (message) => {
           if (!player.playing && !player.paused) {
             return player.play();
           } else {
-            // Đã có bài đang phát dở -> Tự động xếp hàng chờ và thông báo
+            // Đã có bài đang phát dở -> Tự động xếp hàng chờ
             return message.reply(`✅ Đã thêm vào hàng chờ: \`${track.info.title}\``);
           }
         } else {
