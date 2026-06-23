@@ -131,7 +131,7 @@ client.riffy.on("trackStart", async (player, track) => {
     const embed = new EmbedBuilder()
       .setColor(0x00FF00)
       .setTitle('🎵 Đang phát nhạc')
-      .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>\n\n${createProgressBar(0, track.info.length)}`)
+      .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>`)
       .setFooter({ text: 'Chỉ người yêu cầu hoặc Admin mới có quyền sử dụng m!leave' })
       .setTimestamp();
 
@@ -251,7 +251,7 @@ client.on('interactionCreate', async (interaction) => {
 
     if (player.connected) {
       if (!player.playing && !player.paused) {
-        // Log thông tin trước khi chạy player.play()
+        // Log thông tin trước khi chạy player.play() cho Search Selector [1.3.4, 2.2.1]
         console.log("[TRACK INFO]", chosenTrack.info);
         console.log("[NODE USED]", player.node?.name);
 
@@ -331,18 +331,20 @@ client.on('messageCreate', async (message) => {
       // Nhận diện liên kết để phân phối luồng phát phù hợp
       const isUrl = query.startsWith('http://') || query.startsWith('https://');
       const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
-      const isSoundCloud = isUrl && query.includes('soundcloud.com'); // Nhận diện SoundCloud gốc
-      const isSpotify = isUrl && query.includes('spotify.com');       // Nhận diện Spotify gốc
+      const isSpotify = isUrl && query.includes('spotify.com');
 
-      // CHỈ dùng yt-dlp cho các liên kết ngoài thực sự (như TikTok, Facebook...) không được Lavalink hỗ trợ mặc định [5]
-      if (isUrl && !isYouTube && !isSoundCloud && !isSpotify) {
+      // SỬA ĐỔI ĐIỀU KIỆN THEO YÊU CẦU: SoundCloud bắt buộc phải chạy qua yt-dlp [5]
+      if (isUrl && !isYouTube && !isSpotify) {
         const directUrl = await getDirectAudioUrl(query);
         if (directUrl) {
-          finalQuery = directUrl; // Gửi link âm thanh tĩnh này cho Lavalink giải mã từ xa!
+          finalQuery = directUrl;
         }
       }
 
-      console.log("[LAVALINK QUERY]:", finalQuery);
+      // THÊM ĐOẠN LOG ĐỂ THEO DÕI ĐƯỜNG DẪN KHI RESOLVE [1.3.4]
+      console.log("[SOURCE URL]", query);
+      console.log("[FINAL QUERY]", finalQuery);
+      console.log("[USING YTDLP]", finalQuery !== query);
 
       // Khởi tạo và liên kết Player Lavalink
       const player = client.riffy.createConnection({
@@ -357,16 +359,21 @@ client.on('messageCreate', async (message) => {
 
       player.requesterId = message.author.id;
 
-      // PHÂN TÍCH LIÊN KẾT NHẠC (BỎ QUA LỖI BẰNG BẪY CATCH CHI TIẾT) [1.3.4, 2.2.1]
+      // PHÂN TÍCH LIÊN KẾT NHẠC KÈM HÀM LOG CHI TIẾT KHI GẶP LỖI [1.3.4, 2.2.1]
       const resolve = await client.riffy.resolve({
         query: finalQuery,
         requester: message.author
       }).catch(err => {
-        console.error("[RESOLVE ERROR]", err); // Log toàn bộ object lỗi khi resolve thất bại
+        console.error("[LAVALINK RESOLVE FAILED]");
+        console.error({
+          node: player.node?.name,
+          query: finalQuery,
+          error: err
+        });
         return null;
       });
       
-      // LOG KẾT QUẢ RESOLVE ĐẦY ĐỦ VÀ THÔNG SỐ LOADTYPE [1.3.4, 2.2.1]
+      // LOG KẾT QUẢ RESOLVE ĐẦY ĐỦ VÀ THÔNG SỐ LOADTYPE
       console.log("[RESOLVE]", JSON.stringify(resolve, null, 2));
       console.log("[LOADTYPE]", resolve?.loadType);
       console.log("[TRACK COUNT]", resolve?.tracks?.length);
@@ -469,7 +476,7 @@ client.on('messageCreate', async (message) => {
 
         if (player.connected) {
           if (!player.playing && !player.paused) {
-            // Log thông tin trước khi chạy player.play() cho Track đơn lẻ [1.3.4, 2.2.1]
+            // Log thông tin trước khi chạy player.play() cho Track [1.3.4, 2.2.1]
             console.log("[TRACK INFO]", track.info);
             console.log("[NODE USED]", player.node?.name);
 
