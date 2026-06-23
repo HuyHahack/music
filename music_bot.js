@@ -1,7 +1,6 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 const { Riffy } = require('riffy');
 const express = require('express');
-const execAsync = require('util').promisify(require('child_process').exec);
 require('dotenv/config');
 
 // ============ EXPRESS SERVER ============
@@ -26,28 +25,14 @@ const client = new Client({
 
 const PREFIX = 'm!';
 
-// Cấu hình cụm máy chủ Lavalink v4 công cộng (Đặt máy chủ Jirayu Net lên ưu tiên số 1) [2.2.1]
+// Cấu hình duy nhất máy chủ NYX Singapore Node 1 theo yêu cầu của bạn [2.2.1]
 const nodes = [
   {
-    name: "Jirayu Net",
-    host: "lavalink.jirayu.net",
-    port: 443,
-    password: "jfish",
-    secure: true
-  },
-  {
-    name: "HeavenCloud IN",
-    host: "89.106.84.59",
-    port: 4000,
-    password: "heavencloud.in",
+    name: "NYX Singapore Node 1",
+    host: "sg1-nodelink.nyxbot.app",
+    port: 3000,
+    password: "nyxbot.app/support",
     secure: false
-  },
-  {
-    name: "Serenetia v4",
-    host: "lavalinkv4.serenetia.com",
-    port: 443,
-    password: "https://dsc.gg/ajidevserver",
-    secure: true
   }
 ];
 
@@ -94,20 +79,6 @@ function createProgressBar(position, duration, size = 15) {
   return `${bar} [${formatTime(position)} / ${formatTime(duration)}]`;
 }
 
-// Hàm trích xuất liên kết âm thanh trực tiếp bằng yt-dlp cho các nền tảng ngoài (TikTok, Facebook...)
-async function getDirectAudioUrl(url) {
-  console.log(`\n[yt-dlp] 🌐 Đang trích xuất Direct URL cho liên kết: ${url}`);
-  try {
-    const { stdout } = await execAsync(`yt-dlp -f "bestaudio[protocol^=http]/bestaudio" -g "${url}"`);
-    const directUrl = stdout.trim().split('\n')[0];
-    console.log(`[yt-dlp] ✅ Đã lấy được Direct URL tĩnh thành công.`);
-    return directUrl;
-  } catch (err) {
-    console.error('⚠️ Lỗi trích xuất yt-dlp:', err.message);
-    return null;
-  }
-}
-
 // Hàm giám sát thông minh tự động phát hiện trình phát nhạc đang hoạt động trên Server
 function getActivePlayer(guildId) {
   const lavalinkPlayer = client.riffy.players.get(guildId);
@@ -126,13 +97,10 @@ client.once('ready', () => {
 client.riffy.on("trackStart", async (player, track) => {
   const channel = client.channels.cache.get(player.textChannel);
   if (channel) {
-    // Nếu là link thô do yt-dlp bypass thì đặt tên mặc định, nếu là nhạc gốc thì giữ tên bài hát của track
-    const title = track.info.title.startsWith('http') ? 'Liên kết ngoài / SoundCloud' : track.info.title;
-
     const embed = new EmbedBuilder()
       .setColor(0x00FF00)
       .setTitle('🎵 Đang phát nhạc')
-      .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>`)
+      .setDescription(`**Tác phẩm:** \`${track.info.title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>\n\n${createProgressBar(0, track.info.length)}`)
       .setFooter({ text: 'Chỉ người yêu cầu hoặc Admin mới có quyền sử dụng m!leave' })
       .setTimestamp();
 
@@ -150,7 +118,7 @@ client.riffy.on("trackStart", async (player, track) => {
         }
 
         const updatedEmbed = EmbedBuilder.from(embed)
-          .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>\n\n${createProgressBar(activePlayer.position, track.info.length)}`);
+          .setDescription(`**Tác phẩm:** \`${track.info.title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>\n\n${createProgressBar(activePlayer.position, track.info.length)}`);
 
         await msg.edit({ embeds: [updatedEmbed] }).catch(() => {
           clearInterval(player.progressInterval);
@@ -327,26 +295,12 @@ client.on('messageCreate', async (message) => {
     await message.channel.sendTyping().catch(() => {});
 
     try {
-      let finalQuery = query;
-
-      // Nhận diện liên kết để phân phối luồng phát phù hợp
-      const isUrl = query.startsWith('http://') || query.startsWith('https://');
-      const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
-      const isSoundCloud = isUrl && query.includes('soundcloud.com'); // Nhận diện SoundCloud gốc
-      const isSpotify = isUrl && query.includes('spotify.com');       // Nhận diện Spotify gốc
-
-      // SỬA ĐỔI ĐIỀU KIỆN THEO YÊU CẦU: SoundCloud bỏ qua yt-dlp, gửi thẳng trực tiếp cho Lavalink! [2.2.7, 5]
-      if (isUrl && !isYouTube && !isSoundCloud && !isSpotify) {
-        const directUrl = await getDirectAudioUrl(query);
-        if (directUrl) {
-          finalQuery = directUrl;
-        }
-      }
+      // Đã gạt bỏ hoàn toàn bộ giải mã yt-dlp theo yêu cầu [5]
+      const finalQuery = query;
 
       // THÊM ĐOẠN LOG ĐỂ THEO DÕI ĐƯỜNG DẪN KHI RESOLVE [1.3.4]
       console.log("[SOURCE URL]", query);
       console.log("[FINAL QUERY]", finalQuery);
-      console.log("[USING YTDLP]", finalQuery !== query);
 
       // Khởi tạo và liên kết Player Lavalink
       const player = client.riffy.createConnection({
@@ -366,16 +320,11 @@ client.on('messageCreate', async (message) => {
         query: finalQuery,
         requester: message.author
       }).catch(err => {
-        console.error("[LAVALINK RESOLVE FAILED]");
-        console.error({
-          node: player.node?.name,
-          query: finalQuery,
-          error: err
-        });
+        console.error("[RESOLVE ERROR]", err); // Log toàn bộ object lỗi khi resolve thất bại
         return null;
       });
       
-      // LOG KẾT QUẢ RESOLVE ĐẦY ĐỦ VÀ THÔNG SỐ LOADTYPE [1.3.4]
+      // LOG KẾT QUẢ RESOLVE ĐẦY ĐỦ VÀ THÔNG SỐ LOADTYPE [1.3.4, 2.2.1]
       console.log("[RESOLVE]", JSON.stringify(resolve, null, 2));
       console.log("[LOADTYPE]", resolve?.loadType);
       console.log("[TRACK COUNT]", resolve?.tracks?.length);
