@@ -131,7 +131,7 @@ client.riffy.on("trackStart", async (player, track) => {
     const embed = new EmbedBuilder()
       .setColor(0x00FF00)
       .setTitle('🎵 Đang phát nhạc')
-      .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>\n\n${createProgressBar(0, track.info.length)}`)
+      .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>`)
       .setFooter({ text: 'Chỉ người yêu cầu hoặc Admin mới có quyền sử dụng m!leave' })
       .setTimestamp();
 
@@ -304,11 +304,10 @@ client.on('messageCreate', async (message) => {
       // Nhận diện liên kết để phân phối luồng phát phù hợp
       const isUrl = query.startsWith('http://') || query.startsWith('https://');
       const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
-      const isSoundCloud = isUrl && query.includes('soundcloud.com'); // Nhận diện SoundCloud gốc
-      const isSpotify = isUrl && query.includes('spotify.com');       // Nhận diện Spotify gốc
+      const isSpotify = isUrl && query.includes('spotify.com');
 
-      // CHỈ dùng yt-dlp cho các liên kết ngoài thực sự (như TikTok, Facebook...) không được Lavalink hỗ trợ mặc định [5]
-      if (isUrl && !isYouTube && !isSoundCloud && !isSpotify) {
+      // Đã cập nhật điều kiện: Cho phép SoundCloud chạy qua yt-dlp để lấy link direct .mp3 tĩnh bypass [5]
+      if (isUrl && !isYouTube && !isSpotify) {
         const directUrl = await getDirectAudioUrl(query);
         if (directUrl) {
           finalQuery = directUrl; // Gửi link âm thanh tĩnh này cho Lavalink giải mã từ xa!
