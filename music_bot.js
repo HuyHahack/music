@@ -131,7 +131,7 @@ client.riffy.on("trackStart", async (player, track) => {
     const embed = new EmbedBuilder()
       .setColor(0x00FF00)
       .setTitle('🎵 Đang phát nhạc')
-      .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>`)
+      .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** <@${track.info.requester.id}>\n\n${createProgressBar(0, track.info.length)}`)
       .setFooter({ text: 'Chỉ người yêu cầu hoặc Admin mới có quyền sử dụng m!leave' })
       .setTimestamp();
 
@@ -169,13 +169,30 @@ client.riffy.on("queueEnd", async (player) => {
   }
 });
 
-// Sự kiện: Đăng ký bắt lỗi luồng phát Lavalink tránh sập Bot [1.3.4, 2.2.1]
-client.riffy.on("playerError", (player, track, error) => {
-  console.error(`❌ Lỗi luồng phát tại Server ${player.guildId}:`, error.message);
+// ============ BỔ SUNG CÁC SỰ KIỆN LAVALINK TRỰC QUAN (DEBUG LOGS) [1.3.4, 2.2.1] ============
+client.riffy.on("nodeConnect", node => {
+  console.log(`[NODE CONNECT] ${node.name}`);
+});
+
+client.riffy.on("nodeDisconnect", (node, code, reason) => {
+  console.log(`[NODE DISCONNECT] ${node.name}`);
+  console.log("Code:", code);
+  console.log("Reason:", reason);
 });
 
 client.riffy.on("nodeError", (node, error) => {
-  console.error(`❌ Lỗi máy chủ Lavalink "${node.name}":`, error.message);
+  console.log(`[NODE ERROR] ${node.name}`);
+  console.error(error);
+});
+
+client.riffy.on("trackError", (player, track, error) => {
+  console.log("[TRACK ERROR]");
+  console.error(error);
+});
+
+client.riffy.on("playerError", (player, track, error) => {
+  console.log("[PLAYER ERROR]");
+  console.error(error);
 });
 
 // Trích xuất dữ liệu Gateway cập nhật Voice State cho Lavalink
@@ -234,7 +251,17 @@ client.on('interactionCreate', async (interaction) => {
 
     if (player.connected) {
       if (!player.playing && !player.paused) {
-        player.play();
+        // Log thông tin trước khi chạy player.play()
+        console.log("[TRACK INFO]", chosenTrack.info);
+        console.log("[NODE USED]", player.node?.name);
+
+        try {
+          await player.play();
+          console.log("[PLAY SUCCESS]");
+        } catch (err) {
+          console.error("[PLAY FAILED]", err);
+        }
+
         await interaction.editReply({ content: '✅ Bắt đầu phát bài hát đã chọn!' });
       } else {
         await interaction.editReply({ content: `✅ Đã thêm vào hàng chờ: \`${chosenTrack.info.title}\`` });
@@ -304,10 +331,11 @@ client.on('messageCreate', async (message) => {
       // Nhận diện liên kết để phân phối luồng phát phù hợp
       const isUrl = query.startsWith('http://') || query.startsWith('https://');
       const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
-      const isSpotify = isUrl && query.includes('spotify.com');
+      const isSoundCloud = isUrl && query.includes('soundcloud.com'); // Nhận diện SoundCloud gốc
+      const isSpotify = isUrl && query.includes('spotify.com');       // Nhận diện Spotify gốc
 
-      // Đã cập nhật điều kiện: Cho phép SoundCloud chạy qua yt-dlp để lấy link direct .mp3 tĩnh bypass [5]
-      if (isUrl && !isYouTube && !isSpotify) {
+      // CHỈ dùng yt-dlp cho các liên kết ngoài thực sự (như TikTok, Facebook...) không được Lavalink hỗ trợ mặc định [5]
+      if (isUrl && !isYouTube && !isSoundCloud && !isSpotify) {
         const directUrl = await getDirectAudioUrl(query);
         if (directUrl) {
           finalQuery = directUrl; // Gửi link âm thanh tĩnh này cho Lavalink giải mã từ xa!
@@ -324,11 +352,25 @@ client.on('messageCreate', async (message) => {
         deaf: true
       });
 
+      // LOG THÔNG TIN NODE ĐANG ĐƯỢC CHỌN [1.3.4, 2.2.1]
+      console.log("[NODE]", player.node?.name);
+
       player.requesterId = message.author.id;
 
-      // Phân tích liên kết nhạc qua Lavalink (Bọc catch để tránh sập bot) [1.3.4]
-      const resolve = await client.riffy.resolve({ query: finalQuery, requester: message.author }).catch(() => null);
+      // PHÂN TÍCH LIÊN KẾT NHẠC (BỎ QUA LỖI BẰNG BẪY CATCH CHI TIẾT) [1.3.4, 2.2.1]
+      const resolve = await client.riffy.resolve({
+        query: finalQuery,
+        requester: message.author
+      }).catch(err => {
+        console.error("[RESOLVE ERROR]", err); // Log toàn bộ object lỗi khi resolve thất bại
+        return null;
+      });
       
+      // LOG KẾT QUẢ RESOLVE ĐẦY ĐỦ VÀ THÔNG SỐ LOADTYPE [1.3.4, 2.2.1]
+      console.log("[RESOLVE]", JSON.stringify(resolve, null, 2));
+      console.log("[LOADTYPE]", resolve?.loadType);
+      console.log("[TRACK COUNT]", resolve?.tracks?.length);
+
       if (!resolve || !resolve.tracks || resolve.tracks.length === 0) {
         player.destroy();
         return message.reply('❌ Không tìm thấy bài hát hoặc lỗi kết nối máy chủ giải mã!');
@@ -351,9 +393,20 @@ client.on('messageCreate', async (message) => {
 
         if (player.connected) {
           if (!player.playing && !player.paused) {
-            return player.play();
+            // Log thông tin trước khi chạy player.play() cho Playlist [1.3.4, 2.2.1]
+            const firstTrack = tracks[0];
+            if (firstTrack) {
+              console.log("[TRACK INFO]", firstTrack.info);
+            }
+            console.log("[NODE USED]", player.node?.name);
+
+            try {
+              await player.play();
+              console.log("[PLAY SUCCESS]");
+            } catch (err) {
+              console.error("[PLAY FAILED]", err);
+            }
           } else {
-            // Đã có bài đang phát dở -> Tự động xếp hàng chờ
             return message.reply(`✅ Đã thêm danh sách phát **${playlistInfo.name}** (${tracks.length} bài) vào hàng chờ!`);
           }
         } else {
@@ -361,14 +414,13 @@ client.on('messageCreate', async (message) => {
           return message.reply('❌ Kết nối tới phòng thoại thất bại do đường truyền Discord quá tải!');
         }
       } 
-      // ---------------- PHÂN LOẠI B: TÌM KIẾM TRÊN YOUTUBE MUSIC (KÍCH HOẠT SELECT MENU) ----------------
+      // ---------------- PHÂN LOẠI B: TÌM KIẾM TRÊN YOUTUBE MUSIC ----------------
       else if (loadType === 'search') {
         const topTracks = tracks.slice(0, 5); // Lấy 5 kết quả tốt nhất
 
-        // Xây dựng Menu lựa chọn
         const selectMenu = new StringSelectMenuBuilder()
           .setCustomId('search_select')
-          .setPlaceholder('🛒 | Chọn bài hát bạn muốn phát...')
+          .setPlaceholder('🛒 | Chọn sản phẩm để mua')
           .addOptions(
             topTracks.map((t, index) => 
               new StringSelectMenuOptionBuilder()
@@ -389,7 +441,6 @@ client.on('messageCreate', async (message) => {
 
         const searchMsg = await message.reply({ embeds: [embed], components: [row] });
 
-        // Lưu thông tin tạm thời vào Map để xử lý tương tác click
         tempSearchTracks.set(message.author.id, {
           tracks: topTracks,
           voiceChannelId: voiceChannel.id,
@@ -397,7 +448,6 @@ client.on('messageCreate', async (message) => {
           searchMsgId: searchMsg.id
         });
 
-        // Tự động xóa bảng chọn sau 1 phút nếu không có ai tương tác
         setTimeout(() => {
           if (tempSearchTracks.has(message.author.id)) {
             tempSearchTracks.delete(message.author.id);
@@ -419,9 +469,17 @@ client.on('messageCreate', async (message) => {
 
         if (player.connected) {
           if (!player.playing && !player.paused) {
-            return player.play();
+            // Log thông tin trước khi chạy player.play() cho Track đơn lẻ [1.3.4, 2.2.1]
+            console.log("[TRACK INFO]", track.info);
+            console.log("[NODE USED]", player.node?.name);
+
+            try {
+              await player.play();
+              console.log("[PLAY SUCCESS]");
+            } catch (err) {
+              console.error("[PLAY FAILED]", err);
+            }
           } else {
-            // Đã có bài đang phát dở -> Tự động xếp hàng chờ
             return message.reply(`✅ Đã thêm vào hàng chờ: \`${track.info.title}\``);
           }
         } else {
@@ -440,7 +498,7 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // ============ LỆNH m!leave (Tắt nhạc & Rời phòng) ============
+  // ============ LỆNH m!leave ============
   if (command === 'leave' || command === 'stop') {
     const player = getActivePlayer(message.guild.id);
 
