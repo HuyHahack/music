@@ -26,27 +26,13 @@ const client = new Client({
 
 const PREFIX = 'm!';
 
-// Cấu hình cụm máy chủ Lavalink v4 công cộng cho YouTube & SoundCloud (Tự động Load Balancing) [2.2.1]
+// Cấu hình duy nhất máy chủ NYX Singapore Node 1 theo yêu cầu của bạn [2.2.1]
 const nodes = [
   {
     name: "NYX Singapore Node 1",
     host: "sg1-nodelink.nyxbot.app",
     port: 3000,
     password: "nyxbot.app/support",
-    secure: false
-  },
-  {
-    name: "Jirayu Net",
-    host: "lavalink.jirayu.net",
-    port: 443,
-    password: "jfish",
-    secure: true
-  },
-  {
-    name: "HeavenCloud IN",
-    host: "89.106.84.59",
-    port: 4000,
-    password: "heavencloud.in",
     secure: false
   }
 ];
@@ -56,7 +42,7 @@ client.riffy = new Riffy(client, nodes, {
     const guild = client.guilds.cache.get(payload.d.guild_id);
     if (guild) guild.shard.send(payload);
   },
-  defaultSearchPlatform: "ytmsearch",
+  defaultSearchPlatform: "ytsearch", // Thay thế thành công cụ tìm kiếm YouTube thường theo yêu cầu
   restVersion: "v4",
   bypassChecks: {
     nodeFetchInfo: true
