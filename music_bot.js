@@ -26,14 +26,28 @@ const client = new Client({
 
 const PREFIX = 'm!';
 
-// Cấu hình duy nhất máy chủ NYX Singapore Node 1 theo yêu cầu của bạn [2.2.1]
+// Cấu hình cụm máy chủ Lavalink v4 công cộng cho YouTube & SoundCloud (Tự động Load Balancing) [2.2.1]
 const nodes = [
   {
-    name: "NYX Singapore Node 1",
-    host: "sg1-nodelink.nyxbot.app",
-    port: 3000,
-    password: "nyxbot.app/support",
+    name: "HeavenCloud IN",
+    host: "89.106.84.59",
+    port: 4000,
+    password: "heavencloud.in",
     secure: false
+  },
+  {
+    name: "AjieBlogs EU",
+    host: "lava-v4.ajieblogs.eu.org",
+    port: 443,
+    password: "https://dsc.gg/ajidevserver",
+    secure: true
+  },
+  {
+    name: "Serenetia v4",
+    host: "lavalinkv4.serenetia.com",
+    port: 443,
+    password: "https://dsc.gg/ajidevserver",
+    secure: true
   }
 ];
 
@@ -42,7 +56,7 @@ client.riffy = new Riffy(client, nodes, {
     const guild = client.guilds.cache.get(payload.d.guild_id);
     if (guild) guild.shard.send(payload);
   },
-  defaultSearchPlatform: "ytsearch", // Thay thế thành công cụ tìm kiếm YouTube thường theo yêu cầu
+  defaultSearchPlatform: "ytsearch", // Tìm kiếm mặc định trên Youtube thường
   restVersion: "v4",
   bypassChecks: {
     nodeFetchInfo: true
@@ -54,7 +68,7 @@ const globalCooldowns = new Map();
 
 // Khai báo đầy đủ các bộ nhớ đệm quản lý chống spam lệnh và tìm kiếm bài hát
 const playCooldowns = new Map();      // Giới hạn thời gian chờ riêng cho lệnh phát nhạc (10 giây)
-const tempSearchTracks = new Map();   // Lưu tạm kết quả tìm kiếm (Key: userId)
+const tempSearchTracks = new Map();   // Lưu tạm kết quả tìm kiếm (Key: ID tin nhắn gửi đi - searchMsg.id)
 
 // Hàm hỗ trợ chuyển đổi mili-giây sang định dạng MM:SS
 function formatTime(ms) {
@@ -195,17 +209,22 @@ client.on('interactionCreate', async (interaction) => {
   if (interaction.customId === 'search_select') {
     await interaction.deferReply({ ephemeral: true });
 
-    const userId = interaction.user.id;
-    const searchData = tempSearchTracks.get(userId);
+    // FIX LỖI CACHE: Lấy dữ liệu tạm dựa trên ID tin nhắn thay vì ID tài khoản [1.2.5]
+    const searchData = tempSearchTracks.get(interaction.message.id);
 
     if (!searchData) {
-      return interaction.editReply({ content: '❌ Phiên tìm kiếm đã hết hạn hoặc bạn không phải là người gọi lệnh này!' });
+      return interaction.editReply({ content: '❌ Phiên tìm kiếm đã hết hạn hoặc bảng chọn này không còn hiệu lực!' });
+    }
+
+    // Bảo mật: Chỉ cho phép người trực tiếp gọi lệnh tìm kiếm nhấn chọn
+    if (interaction.user.id !== searchData.userId) {
+      return interaction.editReply({ content: '❌ Bạn không phải là người thực hiện tìm kiếm này!' });
     }
 
     const selectedIndex = parseInt(interaction.values[0]);
     const chosenTrack = searchData.tracks[selectedIndex];
 
-    // FIX LỖI: Lấy player hiện hữu trước, tránh gọi createConnection liên tiếp gây mất đồng bộ Voice State
+    // Lấy player hiện hữu trước, tránh gọi createConnection liên tiếp gây mất đồng bộ Voice State
     let player = client.riffy.players.get(interaction.guild.id);
     if (!player) {
       player = client.riffy.createConnection({
@@ -219,7 +238,7 @@ client.on('interactionCreate', async (interaction) => {
     // LOG THÔNG TIN NODE ĐANG ĐƯỢC CHỌN [1.3.4, 2.2.1]
     console.log("[NODE]", player.node?.name);
 
-    player.requesterId = userId;
+    player.requesterId = interaction.user.id;
     chosenTrack.info.requester = interaction.user;
 
     // Thêm vào hàng chờ
@@ -233,7 +252,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     // Xóa dữ liệu tạm trong bộ nhớ đệm
-    tempSearchTracks.delete(userId);
+    tempSearchTracks.delete(interaction.message.id);
 
     // Chờ kết nối phòng thoại sẵn sàng
     let attempts = 0;
@@ -324,14 +343,13 @@ client.on('messageCreate', async (message) => {
       // Nhận diện liên kết để phân phối luồng phát phù hợp
       const isUrl = query.startsWith('http://') || query.startsWith('https://');
       const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
-      const isSoundCloud = isUrl && query.includes('soundcloud.com'); // Nhận diện SoundCloud gốc
-      const isSpotify = isUrl && query.includes('spotify.com');       // Nhận diện Spotify gốc
+      const isSpotify = isUrl && query.includes('spotify.com');
 
-      // Đã cập nhật: SoundCloud, YouTube, Spotify được chuyển sang giải mã gốc của Lavalink (bỏ qua yt-dlp) [1.2.6, 2.2.7]
-      if (isUrl && !isYouTube && !isSoundCloud && !isSpotify) {
+      // SoundCloud bắt buộc chạy qua yt-dlp [5]
+      if (isUrl && !isYouTube && !isSpotify) {
         const directUrl = await getDirectAudioUrl(query);
         if (directUrl) {
-          finalQuery = directUrl; // Chỉ dùng yt-dlp cho các link ngoài đặc biệt khác (TikTok, FB...) [5]
+          finalQuery = directUrl;
         }
       }
 
@@ -417,13 +435,14 @@ client.on('messageCreate', async (message) => {
           return message.reply('❌ Kết nối tới phòng thoại thất bại do đường truyền Discord quá tải!');
         }
       } 
-      // ---------------- PHÂN LOẠI B: TÌM KIẾM TRÊN YOUTUBE MUSIC ----------------
+      // ---------------- PHÂN LOẠI B: TÌM KIẾM TRÊN YOUTUBE MUSIC (HÀNG CHỜ DỮ LIỆU ĐỘC LẬP) [1.2.5] ----------------
       else if (loadType === 'search') {
         const topTracks = tracks.slice(0, 5); // Lấy 5 kết quả tốt nhất
 
+        // Sửa đổi Placeholder cho đúng chuyên môn phát nhạc
         const selectMenu = new StringSelectMenuBuilder()
           .setCustomId('search_select')
-          .setPlaceholder('🛒 | Chọn sản phẩm để mua')
+          .setPlaceholder('🎵 | Chọn bài hát bạn muốn phát...')
           .addOptions(
             topTracks.map((t, index) => 
               new StringSelectMenuOptionBuilder()
@@ -444,16 +463,18 @@ client.on('messageCreate', async (message) => {
 
         const searchMsg = await message.reply({ embeds: [embed], components: [row] });
 
-        tempSearchTracks.set(message.author.id, {
+        // CẬP NHẬT: Sử dụng ID tin nhắn làm khóa thay vì ID tài khoản người dùng để tránh ghi đè lỗi phát lộn bài [1.2.5]
+        tempSearchTracks.set(searchMsg.id, {
           tracks: topTracks,
           voiceChannelId: voiceChannel.id,
           textChannelId: message.channel.id,
-          searchMsgId: searchMsg.id
+          searchMsgId: searchMsg.id,
+          userId: message.author.id // Lưu thêm ID người gọi lệnh để đối chiếu
         });
 
         setTimeout(() => {
-          if (tempSearchTracks.has(message.author.id)) {
-            tempSearchTracks.delete(message.author.id);
+          if (tempSearchTracks.has(searchMsg.id)) {
+            tempSearchTracks.delete(searchMsg.id);
             searchMsg.delete().catch(() => {});
           }
         }, 60000);
