@@ -324,13 +324,14 @@ client.on('messageCreate', async (message) => {
       // Nhận diện liên kết để phân phối luồng phát phù hợp
       const isUrl = query.startsWith('http://') || query.startsWith('https://');
       const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
-      const isSpotify = isUrl && query.includes('spotify.com');
+      const isSoundCloud = isUrl && query.includes('soundcloud.com'); // Nhận diện SoundCloud gốc
+      const isSpotify = isUrl && query.includes('spotify.com');       // Nhận diện Spotify gốc
 
-      // SoundCloud bắt buộc chạy qua yt-dlp [5]
-      if (isUrl && !isYouTube && !isSpotify) {
+      // Đã cập nhật: SoundCloud, YouTube, Spotify được chuyển sang giải mã gốc của Lavalink (bỏ qua yt-dlp) [1.2.6, 2.2.7]
+      if (isUrl && !isYouTube && !isSoundCloud && !isSpotify) {
         const directUrl = await getDirectAudioUrl(query);
         if (directUrl) {
-          finalQuery = directUrl;
+          finalQuery = directUrl; // Chỉ dùng yt-dlp cho các link ngoài đặc biệt khác (TikTok, FB...) [5]
         }
       }
 
