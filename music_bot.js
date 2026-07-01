@@ -26,7 +26,7 @@ const client = new Client({
 
 const PREFIX = 'm!';
 
-// Cấu hình duy nhất máy chủ NYX Singapore Node 2 của bạn [2.2.1]
+// Cấu hình duy nhất máy chủ NYX Singapore Node 2 theo yêu cầu của bạn [2.2.1]
 const nodes = [
   {
     name: "NYX Singapore Node 2",
@@ -42,8 +42,8 @@ client.riffy = new Riffy(client, nodes, {
     const guild = client.guilds.cache.get(payload.d.guild_id);
     if (guild) guild.shard.send(payload);
   },
-  defaultSearchPlatform: "ytsearch", 
-  restVersion: "v4", // ĐÃ SỬA: Quay trở lại v4 để đồng bộ khớp cổng bắt tay WebSocket của NYX Node [2.2.1]
+  defaultSearchPlatform: "ytsearch", // Công cụ tìm kiếm YouTube thường
+  restVersion: "v4",
   bypassChecks: {
     nodeFetchInfo: true
   }
@@ -195,21 +195,22 @@ client.on('interactionCreate', async (interaction) => {
   if (interaction.customId === 'search_select') {
     await interaction.deferReply({ ephemeral: true });
 
-    const userId = interaction.user.id;
+    // Lấy dữ liệu tạm dựa trên ID tin nhắn
     const searchData = tempSearchTracks.get(interaction.message.id);
 
     if (!searchData) {
       return interaction.editReply({ content: '❌ Phiên tìm kiếm đã hết hạn hoặc không tồn tại!' });
     }
 
-    if (interaction.user.id !== searchData.userId) {
+    // Đối chiếu người nhấn nút (Đã thêm bộ lọc tránh lỗi undefined khi chạy bản bot cũ)
+    if (searchData.userId && interaction.user.id !== searchData.userId) {
       return interaction.editReply({ content: '❌ Bạn không phải là người thực hiện tìm kiếm này!' });
     }
 
     const selectedIndex = parseInt(interaction.values[0]);
     const chosenTrack = searchData.tracks[selectedIndex];
 
-    // FIX LỖI: Lấy player hiện hữu trước, tránh gọi createConnection liên tiếp gây mất đồng bộ Voice State
+    // Lấy player hiện hữu trước, tránh gọi createConnection liên tiếp gây mất đồng bộ Voice State
     let player = client.riffy.players.get(interaction.guild.id);
     if (!player) {
       player = client.riffy.createConnection({
@@ -447,11 +448,13 @@ client.on('messageCreate', async (message) => {
 
         const searchMsg = await message.reply({ embeds: [embed], components: [row] });
 
+        // Sử dụng ID tin nhắn làm khóa thay vì ID tài khoản người dùng để tránh ghi đè lỗi phát lộn bài
         tempSearchTracks.set(searchMsg.id, {
           tracks: topTracks,
           voiceChannelId: voiceChannel.id,
           textChannelId: message.channel.id,
-          searchMsgId: searchMsg.id
+          searchMsgId: searchMsg.id,
+          userId: message.author.id // Lưu thêm ID người gọi lệnh để đối chiếu
         });
 
         setTimeout(() => {
