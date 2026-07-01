@@ -26,7 +26,6 @@ const client = new Client({
 
 const PREFIX = 'm!';
 
-// Cấu hình duy nhất máy chủ NYX Singapore Node 2 theo yêu cầu của bạn [2.2.1]
 // Cấu hình cụm máy chủ Lavalink v4 tự động luân chuyển (Ưu tiên HeavenCloud không bị tráo nhạc) [1.2.1, 2.2.1]
 const nodes = [
   {
@@ -44,6 +43,19 @@ const nodes = [
     secure: false
   }
 ];
+
+client.riffy = new Riffy(client, nodes, {
+  send: (payload) => {
+    const guild = client.guilds.cache.get(payload.d.guild_id);
+    if (guild) guild.shard.send(payload);
+  },
+  defaultSearchPlatform: "ytsearch", // Công cụ tìm kiếm YouTube thường
+  restVersion: "v4",
+  bypassChecks: {
+    nodeFetchInfo: true
+  }
+});
+
 // Bộ đếm thời gian chờ tránh spam tất cả các lệnh m! (Cooldown 3 giây)
 const globalCooldowns = new Map();
 
@@ -79,6 +91,7 @@ function createProgressBar(position, duration, size = 15) {
 async function getDirectAudioUrl(url) {
   console.log(`\n[yt-dlp] 🌐 Đang trích xuất Direct URL cho liên kết: ${url}`);
   try {
+    // Ép yt-dlp lấy định dạng progressive HTTP stream (như mp3/aac) để phát nhạc mượt mà nhất
     const { stdout } = await execAsync(`yt-dlp -f "bestaudio[protocol^=http]/bestaudio" -g "${url}"`);
     const directUrl = stdout.trim().split('\n')[0];
     console.log(`[yt-dlp] ✅ Đã lấy được Direct URL tĩnh thành công.`);
@@ -220,11 +233,6 @@ client.on('interactionCreate', async (interaction) => {
 
     player.requesterId = userId;
     chosenTrack.info.requester = interaction.user;
-
-    // VÁ LỖI: Nếu bot đang rảnh rỗi, dọn dẹp sạch sẽ hàng chờ cũ bị kẹt trước khi nạp bài mới [2.2.1]
-    if (!player.playing && !player.paused) {
-      player.queue.clear();
-    }
 
     // Thêm vào hàng chờ
     player.queue.add(chosenTrack);
