@@ -167,12 +167,8 @@ client.riffy.on("nodeDisconnect", (node, code, reason) => {
   console.log("Reason:", reason);
 });
 
-// Cập nhật: Tự động lọc ẩn các cảnh báo sự kiện không xác định để giữ sạch log [1.1.2]
 client.riffy.on("nodeError", (node, error) => {
-  if (error && error.message && error.message.includes("Node encountered an unknown event")) {
-    return; // Bỏ qua không in ra log rác
-  }
-  console.log(`[NODE ERROR] ${node?.name || "Unknown Node"}`);
+  console.log(`[NODE ERROR] ${node.name}`);
   console.error(error);
 });
 
@@ -229,6 +225,11 @@ client.on('interactionCreate', async (interaction) => {
 
     player.requesterId = userId;
     chosenTrack.info.requester = interaction.user;
+
+    // VÁ LỖI: Nếu bot đang rảnh rỗi, dọn dẹp sạch sẽ hàng chờ cũ bị kẹt trước khi nạp bài mới [2.2.1]
+    if (!player.playing && !player.paused) {
+      player.queue.clear();
+    }
 
     // Thêm vào hàng chờ
     player.queue.add(chosenTrack);
@@ -390,6 +391,11 @@ client.on('messageCreate', async (message) => {
 
       // ---------------- PHÂN LOẠI A: PLAYLIST DANH SÁCH ----------------
       if (loadType === 'playlist') {
+        // VÁ LỖI: Nếu bot đang rảnh rỗi, dọn dẹp hàng chờ bị kẹt trước khi nạp Playlist mới [2.2.1]
+        if (!player.playing && !player.paused) {
+          player.queue.clear();
+        }
+
         for (const track of tracks) {
           track.info.requester = message.author;
           player.queue.add(track);
@@ -451,7 +457,7 @@ client.on('messageCreate', async (message) => {
 
         const searchMsg = await message.reply({ embeds: [embed], components: [row] });
 
-        // Sử dụng ID tin nhắn làm khóa thay vị ID tài khoản người dùng để tránh ghi đè lỗi phát lộn bài
+        // Sử dụng ID tin nhắn làm khóa thay vì ID tài khoản người dùng để tránh ghi đè lỗi phát lộn bài
         tempSearchTracks.set(searchMsg.id, {
           tracks: topTracks,
           voiceChannelId: voiceChannel.id,
@@ -469,6 +475,11 @@ client.on('messageCreate', async (message) => {
       }
       // ---------------- PHÂN LOẠI C: PHÁT TRỰC TIẾP LINK DUY NHẤT ----------------
       else if (loadType === 'track') {
+        // VÁ LỖI: Nếu bot đang rảnh rỗi, dọn dẹp hàng chờ bị kẹt trước khi nạp bài mới [2.2.1]
+        if (!player.playing && !player.paused) {
+          player.queue.clear();
+        }
+
         const track = tracks.shift();
         track.info.requester = message.author;
         player.queue.add(track);
