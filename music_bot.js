@@ -26,7 +26,7 @@ const client = new Client({
 
 const PREFIX = 'm!';
 
-// Cấu hình duy nhất máy chủ NYX Singapore Node 2 theo yêu cầu của bạn [2.2.1]
+// Cấu hình duy nhất máy chủ NYX Singapore Node 2 của bạn
 const nodes = [
   {
     name: "NYX Singapore Node 2",
@@ -42,8 +42,8 @@ client.riffy = new Riffy(client, nodes, {
     const guild = client.guilds.cache.get(payload.d.guild_id);
     if (guild) guild.shard.send(payload);
   },
-  defaultSearchPlatform: "ytsearch", // Công cụ tìm kiếm YouTube thường
-  restVersion: "v4",
+  defaultSearchPlatform: "ytsearch", 
+  restVersion: "v3", // ĐÃ SỬA: Chuyển sang v3 để đồng bộ tuyệt đối với máy chủ của bạn [2.2.1]
   bypassChecks: {
     nodeFetchInfo: true
   }
@@ -330,7 +330,7 @@ client.on('messageCreate', async (message) => {
       const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
       const isSpotify = isUrl && query.includes('spotify.com');
 
-      // SoundCloud bắt buộc chạy qua yt-dlp [5]
+      // SoundCloud bắt buộc chạy qua yt-dlp
       if (isUrl && !isYouTube && !isSpotify) {
         const directUrl = await getDirectAudioUrl(query);
         if (directUrl) {
@@ -338,7 +338,7 @@ client.on('messageCreate', async (message) => {
         }
       }
 
-      // THÊM ĐOẠN LOG ĐỂ THEO DÕI ĐƯỜNG DẪN KHI RESOLVE [1.3.4]
+      // THÊM ĐOẠN LOG ĐỂ THEO DÕI ĐƯỜNG DẪN KHI RESOLVE
       console.log("[SOURCE URL]", query);
       console.log("[FINAL QUERY]", finalQuery);
 
@@ -372,7 +372,7 @@ client.on('messageCreate', async (message) => {
         return null;
       });
       
-      // LOG KẾT QUẢ RESOLVE ĐẦY ĐỦ VÀ THÔNG SỐ LOADTYPE [1.3.4]
+      // LOG KẾT QUẢ RESOLVE ĐẦY ĐỦ VÀ THÔNG SỐ LOADTYPE
       console.log("[RESOLVE]", JSON.stringify(resolve, null, 2));
       console.log("[LOADTYPE]", resolve?.loadType);
       console.log("[TRACK COUNT]", resolve?.tracks?.length);
@@ -420,7 +420,7 @@ client.on('messageCreate', async (message) => {
           return message.reply('❌ Kết nối tới phòng thoại thất bại do đường truyền Discord quá tải!');
         }
       } 
-      // ---------------- PHÂN LOẠI B: TÌM KIẾM TRÊN YOUTUBE MUSIC (HÀNG CHỜ DỮ LIỆU ĐỘC LẬP) ----------------
+      // ---------------- PHÂN LOẠI B: TÌM KIẾM TRÊN YOUTUBE MUSIC ----------------
       else if (loadType === 'search') {
         const topTracks = tracks.slice(0, 5); // Lấy 5 kết quả tốt nhất
 
@@ -447,18 +447,16 @@ client.on('messageCreate', async (message) => {
 
         const searchMsg = await message.reply({ embeds: [embed], components: [row] });
 
-        // Sử dụng ID tin nhắn làm khóa thay vì ID tài khoản người dùng để tránh ghi đè lỗi phát lộn bài
         tempSearchTracks.set(searchMsg.id, {
           tracks: topTracks,
           voiceChannelId: voiceChannel.id,
           textChannelId: message.channel.id,
-          searchMsgId: searchMsg.id,
-          userId: message.author.id // Lưu thêm ID người gọi lệnh để đối chiếu
+          searchMsgId: searchMsg.id
         });
 
         setTimeout(() => {
-          if (tempSearchTracks.has(searchMsg.id)) {
-            tempSearchTracks.delete(searchMsg.id);
+          if (tempSearchTracks.has(message.author.id)) {
+            tempSearchTracks.delete(message.author.id);
             searchMsg.delete().catch(() => {});
           }
         }, 60000);
