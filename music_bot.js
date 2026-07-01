@@ -26,7 +26,7 @@ const client = new Client({
 
 const PREFIX = 'm!';
 
-// Cấu hình duy nhất máy chủ NYX Singapore Node 2 của bạn
+// Cấu hình duy nhất máy chủ NYX Singapore Node 2 của bạn [2.2.1]
 const nodes = [
   {
     name: "NYX Singapore Node 2",
@@ -43,7 +43,7 @@ client.riffy = new Riffy(client, nodes, {
     if (guild) guild.shard.send(payload);
   },
   defaultSearchPlatform: "ytsearch", 
-  restVersion: "v3", // ĐÃ SỬA: Chuyển sang v3 để đồng bộ tuyệt đối với máy chủ của bạn [2.2.1]
+  restVersion: "v4", // ĐÃ SỬA: Quay trở lại v4 để đồng bộ khớp cổng bắt tay WebSocket của NYX Node [2.2.1]
   bypassChecks: {
     nodeFetchInfo: true
   }
@@ -209,7 +209,7 @@ client.on('interactionCreate', async (interaction) => {
     const selectedIndex = parseInt(interaction.values[0]);
     const chosenTrack = searchData.tracks[selectedIndex];
 
-    // Lấy player hiện hữu trước, tránh gọi createConnection liên tiếp gây mất đồng bộ Voice State
+    // FIX LỖI: Lấy player hiện hữu trước, tránh gọi createConnection liên tiếp gây mất đồng bộ Voice State
     let player = client.riffy.players.get(interaction.guild.id);
     if (!player) {
       player = client.riffy.createConnection({
@@ -330,7 +330,7 @@ client.on('messageCreate', async (message) => {
       const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
       const isSpotify = isUrl && query.includes('spotify.com');
 
-      // SoundCloud bắt buộc chạy qua yt-dlp
+      // SoundCloud bắt buộc chạy qua yt-dlp [5]
       if (isUrl && !isYouTube && !isSpotify) {
         const directUrl = await getDirectAudioUrl(query);
         if (directUrl) {
@@ -338,11 +338,11 @@ client.on('messageCreate', async (message) => {
         }
       }
 
-      // THÊM ĐOẠN LOG ĐỂ THEO DÕI ĐƯỜNG DẪN KHI RESOLVE
+      // THÊM ĐOẠN LOG ĐỂ THEO DÕI ĐƯỜNG DẪN KHI RESOLVE [1.3.4]
       console.log("[SOURCE URL]", query);
       console.log("[FINAL QUERY]", finalQuery);
 
-      // Lấy player hiện hữu trước, tránh gọi createConnection liên tiếp gây mất đồng bộ Voice State
+      // FIX LỖI: Lấy player hiện hữu trước, tránh gọi createConnection liên tiếp gây mất đồng bộ Voice State
       let player = client.riffy.players.get(message.guild.id);
       if (!player) {
         player = client.riffy.createConnection({
@@ -372,7 +372,7 @@ client.on('messageCreate', async (message) => {
         return null;
       });
       
-      // LOG KẾT QUẢ RESOLVE ĐẦY ĐỦ VÀ THÔNG SỐ LOADTYPE
+      // LOG KẾT QUẢ RESOLVE ĐẦY ĐỦ VÀ THÔNG SỐ LOADTYPE [1.3.4]
       console.log("[RESOLVE]", JSON.stringify(resolve, null, 2));
       console.log("[LOADTYPE]", resolve?.loadType);
       console.log("[TRACK COUNT]", resolve?.tracks?.length);
@@ -455,8 +455,8 @@ client.on('messageCreate', async (message) => {
         });
 
         setTimeout(() => {
-          if (tempSearchTracks.has(message.author.id)) {
-            tempSearchTracks.delete(message.author.id);
+          if (tempSearchTracks.has(searchMsg.id)) {
+            tempSearchTracks.delete(searchMsg.id);
             searchMsg.delete().catch(() => {});
           }
         }, 60000);
