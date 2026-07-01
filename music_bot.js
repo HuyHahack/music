@@ -27,7 +27,15 @@ const client = new Client({
 const PREFIX = 'm!';
 
 // Cấu hình duy nhất máy chủ NYX Singapore Node 2 theo yêu cầu của bạn [2.2.1]
+// Cấu hình cụm máy chủ Lavalink v4 tự động luân chuyển (Ưu tiên HeavenCloud không bị tráo nhạc) [1.2.1, 2.2.1]
 const nodes = [
+  {
+    name: "HeavenCloud IN",
+    host: "89.106.84.59",
+    port: 4000,
+    password: "heavencloud.in",
+    secure: false
+  },
   {
     name: "NYX Singapore Node 2",
     host: "sg2-nodelink.nyxbot.app",
@@ -36,19 +44,6 @@ const nodes = [
     secure: false
   }
 ];
-
-client.riffy = new Riffy(client, nodes, {
-  send: (payload) => {
-    const guild = client.guilds.cache.get(payload.d.guild_id);
-    if (guild) guild.shard.send(payload);
-  },
-  defaultSearchPlatform: "ytsearch", // Công cụ tìm kiếm YouTube thường
-  restVersion: "v4",
-  bypassChecks: {
-    nodeFetchInfo: true
-  }
-});
-
 // Bộ đếm thời gian chờ tránh spam tất cả các lệnh m! (Cooldown 3 giây)
 const globalCooldowns = new Map();
 
