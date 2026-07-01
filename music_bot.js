@@ -167,8 +167,12 @@ client.riffy.on("nodeDisconnect", (node, code, reason) => {
   console.log("Reason:", reason);
 });
 
+// Cập nhật: Tự động lọc ẩn các cảnh báo sự kiện không xác định để giữ sạch log [1.1.2]
 client.riffy.on("nodeError", (node, error) => {
-  console.log(`[NODE ERROR] ${node.name}`);
+  if (error && error.message && error.message.includes("Node encountered an unknown event")) {
+    return; // Bỏ qua không in ra log rác
+  }
+  console.log(`[NODE ERROR] ${node?.name || "Unknown Node"}`);
   console.error(error);
 });
 
@@ -195,22 +199,21 @@ client.on('interactionCreate', async (interaction) => {
   if (interaction.customId === 'search_select') {
     await interaction.deferReply({ ephemeral: true });
 
-    // Lấy dữ liệu tạm dựa trên ID tin nhắn
+    const userId = interaction.user.id;
     const searchData = tempSearchTracks.get(interaction.message.id);
 
     if (!searchData) {
       return interaction.editReply({ content: '❌ Phiên tìm kiếm đã hết hạn hoặc không tồn tại!' });
     }
 
-    // Đối chiếu người nhấn nút (Đã thêm bộ lọc tránh lỗi undefined khi chạy bản bot cũ)
-    if (searchData.userId && interaction.user.id !== searchData.userId) {
+    if (interaction.user.id !== searchData.userId) {
       return interaction.editReply({ content: '❌ Bạn không phải là người thực hiện tìm kiếm này!' });
     }
 
     const selectedIndex = parseInt(interaction.values[0]);
     const chosenTrack = searchData.tracks[selectedIndex];
 
-    // Lấy player hiện hữu trước, tránh gọi createConnection liên tiếp gây mất đồng bộ Voice State
+    // FIX LỖI: Lấy player hiện hữu trước, tránh gọi createConnection liên tiếp gây mất đồng bộ Voice State
     let player = client.riffy.players.get(interaction.guild.id);
     if (!player) {
       player = client.riffy.createConnection({
@@ -448,7 +451,7 @@ client.on('messageCreate', async (message) => {
 
         const searchMsg = await message.reply({ embeds: [embed], components: [row] });
 
-        // Sử dụng ID tin nhắn làm khóa thay vì ID tài khoản người dùng để tránh ghi đè lỗi phát lộn bài
+        // Sử dụng ID tin nhắn làm khóa thay vị ID tài khoản người dùng để tránh ghi đè lỗi phát lộn bài
         tempSearchTracks.set(searchMsg.id, {
           tracks: topTracks,
           voiceChannelId: voiceChannel.id,
