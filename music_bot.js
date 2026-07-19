@@ -26,13 +26,13 @@ const client = new Client({
 
 const PREFIX = 'm!';
 
-// Cấu hình cụm máy chủ Lavalink v4 tự động luân chuyển (Ưu tiên HeavenCloud không bị tráo nhạc) [1.2.1, 2.2.1]
+// Cấu hình cụm máy chủ NodeLink (Singapore Node 1 + Node 2)
 const nodes = [
   {
-    name: "HeavenCloud IN",
-    host: "89.106.84.59",
-    port: 4000,
-    password: "heavencloud.in",
+    name: "NYX Singapore Node 1",
+    host: "sg1-nodelink.nyxbot.app",
+    port: 3000,
+    password: "nyxbot.app/support",
     secure: false
   },
   {
@@ -58,10 +58,9 @@ client.riffy = new Riffy(client, nodes, {
 
 // Bộ đếm thời gian chờ tránh spam tất cả các lệnh m! (Cooldown 3 giây)
 const globalCooldowns = new Map();
-
 // Khai báo đầy đủ các bộ nhớ đệm quản lý chống spam lệnh và tìm kiếm bài hát
-const playCooldowns = new Map();      // Giới hạn thời gian chờ riêng cho lệnh phát nhạc (10 giây)
-const tempSearchTracks = new Map();   // Lưu tạm kết quả tìm kiếm (Key: ID tin nhắn gửi đi - searchMsg.id)
+const playCooldowns = new Map(); // Giới hạn thời gian chờ riêng cho lệnh phát nhạc (10 giây)
+const tempSearchTracks = new Map(); // Lưu tạm kết quả tìm kiếm (Key: ID tin nhắn gửi đi - searchMsg.id)
 
 // Hàm hỗ trợ chuyển đổi mili-giây sang định dạng MM:SS
 function formatTime(ms) {
@@ -76,13 +75,10 @@ function formatTime(ms) {
 function createProgressBar(position, duration, size = 15) {
   if (isNaN(position) || isNaN(duration)) return '🔘' + '▬'.repeat(size) + ' [00:00 / 00:00]';
   if (position > duration) position = duration;
-
   const progress = Math.round((size * position) / duration);
   const emptyProgress = size - progress;
-
   const progressText = '▬'.repeat(progress);
   const emptyProgressText = '▬'.repeat(emptyProgress);
-
   const bar = `${progressText}🔘${emptyProgressText}`;
   return `${bar} [${formatTime(position)} / ${formatTime(duration)}]`;
 }
@@ -122,19 +118,15 @@ client.riffy.on("trackStart", async (player, track) => {
   if (channel) {
     const title = track.info.title.startsWith('http') ? 'Liên kết ngoài / SoundCloud' : track.info.title;
     const requesterMention = track.info.requester?.id ? `<@${track.info.requester.id}>` : 'Không rõ';
-
     const embed = new EmbedBuilder()
       .setColor(0x00FF00)
       .setTitle('🎵 Đang phát nhạc')
       .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** ${requesterMention}\n\n${createProgressBar(0, track.info.length)}`)
       .setFooter({ text: 'Chỉ người yêu cầu hoặc Admin mới có quyền sử dụng m!leave' })
       .setTimestamp();
-
     const msg = await channel.send({ embeds: [embed] }).catch(() => null);
-
     if (msg) {
       if (player.progressInterval) clearInterval(player.progressInterval);
-
       // Thiết lập bộ đếm tự động cập nhật lại embed thanh thời gian sau mỗi 10 giây
       player.progressInterval = setInterval(async () => {
         const activePlayer = client.riffy.players.get(player.guildId);
@@ -142,10 +134,8 @@ client.riffy.on("trackStart", async (player, track) => {
           clearInterval(player.progressInterval);
           return;
         }
-
         const updatedEmbed = EmbedBuilder.from(embed)
           .setDescription(`**Tác phẩm:** \`${title}\`\n**Yêu cầu bởi:** ${requesterMention}\n\n${createProgressBar(activePlayer.position, track.info.length)}`);
-
         await msg.edit({ embeds: [updatedEmbed] }).catch(() => {
           clearInterval(player.progressInterval);
         });
@@ -199,21 +189,16 @@ client.on("raw", (d) => {
 // ============ XỬ LÝ LỰA CHỌN BÀI HÁT TỪ MENU TÌM KIẾM (SEARCH SELECTOR) ============
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isStringSelectMenu()) return;
-
   if (interaction.customId === 'search_select') {
     await interaction.deferReply({ ephemeral: true });
-
     const userId = interaction.user.id;
     const searchData = tempSearchTracks.get(interaction.message.id);
-
     if (!searchData) {
       return interaction.editReply({ content: '❌ Phiên tìm kiếm đã hết hạn hoặc không tồn tại!' });
     }
-
     if (interaction.user.id !== searchData.userId) {
       return interaction.editReply({ content: '❌ Bạn không phải là người thực hiện tìm kiếm này!' });
     }
-
     const selectedIndex = parseInt(interaction.values[0]);
     const chosenTrack = searchData.tracks[selectedIndex];
 
@@ -259,14 +244,12 @@ client.on('interactionCreate', async (interaction) => {
         // Log thông tin trước khi chạy player.play() cho Search Selector [1.3.4, 2.2.1]
         console.log("[TRACK INFO]", chosenTrack.info);
         console.log("[NODE USED]", player.node?.name);
-
         try {
           await player.play();
           console.log("[PLAY SUCCESS]");
         } catch (err) {
           console.error("[PLAY FAILED]", err);
         }
-
         await interaction.editReply({ content: '✅ Bắt đầu phát bài hát đã chọn!' });
       } else {
         await interaction.editReply({ content: `✅ Đã thêm vào hàng chờ: \`${chosenTrack.info.title}\`` });
@@ -283,7 +266,6 @@ client.on('interactionCreate', async (interaction) => {
 
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.guild || !message.content.startsWith(PREFIX)) return;
-
   const args = message.content.slice(PREFIX.length).trim().split(/ +/);
   const command = args.shift().toLowerCase();
 
@@ -291,7 +273,6 @@ client.on('messageCreate', async (message) => {
   const userId = message.author.id;
   const now = Date.now();
   const cooldownAmount = 3000;
-
   if (globalCooldowns.has(userId)) {
     const expirationTime = globalCooldowns.get(userId) + cooldownAmount;
     if (now < expirationTime) {
@@ -306,10 +287,8 @@ client.on('messageCreate', async (message) => {
   if (command === 'p' || command === 'play') {
     const query = args.join(' ');
     if (!query) return message.reply('❌ Vui lòng nhập liên kết hoặc tên bài hát cần phát!');
-
     const voiceChannel = message.member.voice.channel;
     if (!voiceChannel) return message.reply('❌ Bạn cần phải tham gia vào một phòng Voice Channel trước!');
-
     const permissions = voiceChannel.permissionsFor(client.user);
     if (!permissions.has('Connect') || !permissions.has('Speak')) {
       return message.reply('❌ Bot không có quyền truy cập hoặc nói chuyện trong phòng voice của bạn!');
@@ -332,7 +311,6 @@ client.on('messageCreate', async (message) => {
 
     try {
       let finalQuery = query;
-
       // Nhận diện liên kết để phân phối luồng phát phù hợp
       const isUrl = query.startsWith('http://') || query.startsWith('https://');
       const isYouTube = isUrl && (query.includes('youtube.com') || query.includes('youtu.be'));
@@ -379,7 +357,7 @@ client.on('messageCreate', async (message) => {
         });
         return null;
       });
-      
+    
       // LOG KẾT QUẢ RESOLVE ĐẦY ĐỦ VÀ THÔNG SỐ LOADTYPE [1.3.4]
       console.log("[RESOLVE]", JSON.stringify(resolve, null, 2));
       console.log("[LOADTYPE]", resolve?.loadType);
@@ -398,18 +376,15 @@ client.on('messageCreate', async (message) => {
         if (!player.playing && !player.paused) {
           player.queue.clear();
         }
-
         for (const track of tracks) {
           track.info.requester = message.author;
           player.queue.add(track);
         }
-
         let attempts = 0;
         while (!player.connected && attempts < 20) {
           await new Promise(r => setTimeout(r, 500));
           attempts++;
         }
-
         if (player.connected) {
           if (!player.playing && !player.paused) {
             // Log thông tin trước khi chạy player.play() cho Playlist [1.3.4, 2.2.1]
@@ -418,7 +393,6 @@ client.on('messageCreate', async (message) => {
               console.log("[TRACK INFO]", firstTrack.info);
             }
             console.log("[NODE USED]", player.node?.name);
-
             try {
               await player.play();
               console.log("[PLAY SUCCESS]");
@@ -432,34 +406,29 @@ client.on('messageCreate', async (message) => {
           player.destroy();
           return message.reply('❌ Kết nối tới phòng thoại thất bại do đường truyền Discord quá tải!');
         }
-      } 
+      }
       // ---------------- PHÂN LOẠI B: TÌM KIẾM TRÊN YOUTUBE MUSIC ----------------
       else if (loadType === 'search') {
         const topTracks = tracks.slice(0, 5); // Lấy 5 kết quả tốt nhất
-
         const selectMenu = new StringSelectMenuBuilder()
           .setCustomId('search_select')
           .setPlaceholder('🎵 | Chọn bài hát bạn muốn phát...')
           .addOptions(
-            topTracks.map((t, index) => 
+            topTracks.map((t, index) =>
               new StringSelectMenuOptionBuilder()
                 .setLabel(`${index + 1}. ${t.info.title.slice(0, 80)}`)
                 .setDescription(`Tác giả: ${t.info.author.slice(0, 40)} | Thời lượng: ${formatTime(t.info.length)}`)
                 .setValue(`${index}`)
             )
           );
-
         const row = new ActionRowBuilder().addComponents(selectMenu);
-
         const embed = new EmbedBuilder()
           .setColor(0x00FF00)
           .setTitle('🔍 KẾT QUẢ TÌM KIẾM')
           .setDescription(topTracks.map((t, index) => `**${index + 1}.** \`${t.info.title}\` - *${t.info.author}*`).join('\n'))
           .setFooter({ text: 'Chọn bài hát bên dưới để phát. Bảng chọn tự hủy sau 1 phút.' })
           .setTimestamp();
-
         const searchMsg = await message.reply({ embeds: [embed], components: [row] });
-
         // Sử dụng ID tin nhắn làm khóa thay vì ID tài khoản người dùng để tránh ghi đè lỗi phát lộn bài
         tempSearchTracks.set(searchMsg.id, {
           tracks: topTracks,
@@ -468,7 +437,6 @@ client.on('messageCreate', async (message) => {
           searchMsgId: searchMsg.id,
           userId: message.author.id // Lưu thêm ID người gọi lệnh để đối chiếu
         });
-
         setTimeout(() => {
           if (tempSearchTracks.has(searchMsg.id)) {
             tempSearchTracks.delete(searchMsg.id);
@@ -482,23 +450,19 @@ client.on('messageCreate', async (message) => {
         if (!player.playing && !player.paused) {
           player.queue.clear();
         }
-
         const track = tracks.shift();
         track.info.requester = message.author;
         player.queue.add(track);
-
         let attempts = 0;
         while (!player.connected && attempts < 20) {
           await new Promise(r => setTimeout(r, 500));
           attempts++;
         }
-
         if (player.connected) {
           if (!player.playing && !player.paused) {
             // Log thông tin trước khi chạy player.play() cho Track [1.3.4, 2.2.1]
             console.log("[TRACK INFO]", track.info);
             console.log("[NODE USED]", player.node?.name);
-
             try {
               await player.play();
               console.log("[PLAY SUCCESS]");
@@ -512,12 +476,11 @@ client.on('messageCreate', async (message) => {
           player.destroy();
           return message.reply('❌ Kết nối tới phòng thoại thất bại do đường truyền Discord quá tải!');
         }
-      } 
+      }
       else {
         player.destroy();
         return message.reply('❌ Định dạng liên kết không khả dụng!');
       }
-
     } catch (error) {
       console.error(error);
       await message.reply(`❌ Lỗi kết nối luồng phát: ${error.message}`);
@@ -527,18 +490,14 @@ client.on('messageCreate', async (message) => {
   // ============ LỆNH m!leave (Tắt nhạc & Rời phòng) ============
   if (command === 'leave' || command === 'stop') {
     const player = getActivePlayer(message.guild.id);
-
     if (!player) {
       return message.reply('❌ Bot hiện tại đang không kết nối phòng thoại!');
     }
-
     const requesterId = player.requesterId;
     const isAdmin = message.member.permissions.has(PermissionFlagsBits.Administrator);
-
     if (requesterId && message.author.id !== requesterId && !isAdmin) {
       return message.reply(`❌ Chỉ có **người yêu cầu phát nhạc** (<@${requesterId}>) hoặc **Quản trị viên** mới được dừng nhạc!`);
     }
-
     if (player.player.progressInterval) clearInterval(player.player.progressInterval); // Hủy bộ đếm thời gian dính
     player.player.destroy();
     await message.reply('👋 Đã dừng nhạc và rời khỏi phòng voice theo yêu cầu.');
@@ -548,14 +507,11 @@ client.on('messageCreate', async (message) => {
   if (command === 'skip' || command === 's') {
     const player = getActivePlayer(message.guild.id);
     if (!player) return message.reply('❌ Bot hiện tại đang không phát nhạc!');
-
     const requesterId = player.requesterId;
     const isAdmin = message.member.permissions.has(PermissionFlagsBits.Administrator);
-
     if (requesterId && message.author.id !== requesterId && !isAdmin) {
       return message.reply(`❌ Chỉ có **người phát nhạc** (<@${requesterId}>) hoặc **Quản trị viên** mới được bỏ qua bài!`);
     }
-
     player.player.stop();
     await message.reply('⏭️ Đã bỏ qua bài hát hiện tại.');
   }
@@ -580,7 +536,6 @@ client.on('messageCreate', async (message) => {
   if (command === 'queue' || command === 'q') {
     const player = getActivePlayer(message.guild.id);
     if (!player || player.player.queue.length === 0) return message.reply('❌ Danh sách hàng chờ hiện tại đang trống!');
-
     const queueList = player.player.queue.map((track, index) => `**#${index + 1}** | \`${track.info.title}\``).slice(0, 10).join('\n');
     const embed = new EmbedBuilder()
       .setColor(0x00FF00)
@@ -594,10 +549,8 @@ client.on('messageCreate', async (message) => {
   if (command === 'volume' || command === 'vol') {
     const player = getActivePlayer(message.guild.id);
     if (!player) return message.reply('❌ Bot hiện tại đang không phát nhạc!');
-
     const vol = parseInt(args[0]);
     if (isNaN(vol) || vol < 1 || vol > 100) return message.reply('❌ Âm lượng hợp lệ phải nằm trong khoảng từ 1 đến 100!');
-
     player.player.setVolume(vol);
     await message.reply(`🔊 Đã thiết lập âm lượng thành: **${vol}%**`);
   }
@@ -606,11 +559,9 @@ client.on('messageCreate', async (message) => {
   if (command === 'repeat' || command === 'loop') {
     const player = getActivePlayer(message.guild.id);
     if (!player) return message.reply('❌ Bot hiện tại đang không phát nhạc!');
-
     const currentLoop = player.player.loop;
     let newLoop = "none";
     let statusText = "TẮT";
-
     if (currentLoop === "none") {
       newLoop = "track";
       statusText = "LẶP LẠI BÀI HÁT ĐANG PHÁT 🔂";
@@ -621,7 +572,6 @@ client.on('messageCreate', async (message) => {
       newLoop = "none";
       statusText = "TẮT LẶP LẠI ❌";
     }
-
     player.player.setLoop(newLoop);
     await message.reply(`✅ Đã thiết lập chế độ lặp nhạc thành: **${statusText}**`);
   }
