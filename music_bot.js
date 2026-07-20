@@ -30,14 +30,13 @@ const PREFIX = 'm!';
 // ============ Cấu hình Lavalink Node ============
 const nodes = [
   {
-    name: "TriniumHost BR 01",
-    host: "lavalink.triniumhost.com",
-    port: 9008,
-    password: "free",
+    name: "NYX Singapore Node 1",
+    host: "sg1-nodelink.nyxbot.app",
+    port: 3000,
+    password: "nyxbot.app/support",
     secure: false
   }
 ];
-
 client.riffy = new Riffy(client, nodes, {
   send: (payload) => {
     const guild = client.guilds.cache.get(payload.d.guild_id);
