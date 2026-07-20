@@ -27,19 +27,13 @@ const client = new Client({
 const PREFIX = 'm!';
 
 // Cấu hình cụm máy chủ NodeLink (Singapore Node 1 + Node 2)
+// ============ Cấu hình Lavalink Node ============
 const nodes = [
   {
-    name: "NYX Singapore Node 1",
-    host: "sg1-nodelink.nyxbot.app",
-    port: 3000,
-    password: "nyxbot.app/support",
-    secure: false
-  },
-  {
-    name: "NYX Singapore Node 2",
-    host: "sg2-nodelink.nyxbot.app",
-    port: 3000,
-    password: "nyxbot.app/support",
+    name: "TriniumHost BR 01",
+    host: "lavalink.triniumhost.com",
+    port: 9008,
+    password: "free",
     secure: false
   }
 ];
