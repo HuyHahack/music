@@ -30,9 +30,9 @@ const PREFIX = 'm!';
 // ============ Cấu hình Lavalink Node ============
 const nodes = [
   {
-  "host": "sg1-nodelink.nyxbot.app",
-  "port": 3000,
-  "password": "nyxbot.app/support",
+  "host": "lavalink.jirayu.net",
+  "port": 13592,
+  "password": "youshallnotpass",
   "secure": false
 }
 ];
