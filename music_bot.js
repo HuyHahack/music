@@ -30,12 +30,11 @@ const PREFIX = 'm!';
 // ============ Cấu hình Lavalink Node ============
 const nodes = [
   {
-    name: "NYX Singapore Node 1",
-    host: "sg1-nodelink.nyxbot.app",
-    port: 3000,
-    password: "nyxbot.app/support",
-    secure: false
-  }
+  "host": "89.106.84.59",
+  "port": 4000,
+  "password": "heavencloud.in",
+  "secure": false
+}
 ];
 client.riffy = new Riffy(client, nodes, {
   send: (payload) => {
