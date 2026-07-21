@@ -30,11 +30,40 @@ const PREFIX = 'm!';
 // ============ Cấu hình Lavalink Node ============
 const nodes = [
   {
-  "host": "lavalink.jirayu.net",
-  "port": 13592,
-  "password": "youshallnotpass",
-  "secure": false
-}
+    name: "Jirayu v4",
+    host: "lavalink.jirayu.net",
+    port: 13592,
+    password: "youshallnotpass",
+    secure: false
+  },
+  {
+    name: "Serenetia v4",
+    host: "lavalinkv4.serenetia.com",
+    port: 80,
+    password: "https://seretia.link/discord",
+    secure: false
+  },
+  {
+    name: "TriniumHost",
+    host: "lavalink.triniumhost.com",
+    port: 4333,
+    password: "free",
+    secure: false
+  },
+  {
+    name: "G3V",
+    host: "lava.g3v.co.uk",
+    port: 9008,
+    password: "lavalinklol",
+    secure: false
+  },
+  {
+    name: "Nexcloud",
+    host: "n3.nexcloud.in",
+    port: 2026,
+    password: "nexcloud",
+    secure: false
+  }
 ];
 client.riffy = new Riffy(client, nodes, {
   send: (payload) => {
