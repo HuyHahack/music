@@ -56,13 +56,6 @@ const nodes = [
     port: 9008,
     password: "lavalinklol",
     secure: false
-  },
-  {
-    name: "Nexcloud",
-    host: "n3.nexcloud.in",
-    port: 2026,
-    password: "nexcloud",
-    secure: false
   }
 ];
 client.riffy = new Riffy(client, nodes, {
