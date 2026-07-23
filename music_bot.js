@@ -26,9 +26,22 @@ const client = new Client({
 
 const PREFIX = 'm!';
 
-// Cấu hình cụm máy chủ NodeLink (Singapore Node 1 + Node 2)
 // ============ Cấu hình Lavalink Node ============
 const nodes = [
+  {
+    name: "NYX Singapore 1",
+    host: "sg1-nodelink.nyxbot.app",
+    port: 3000,
+    password: "nyxbot.app/support",
+    secure: false
+  },
+  {
+    name: "Serenetia v4",
+    host: "lavalinkv4.serenetia.com",
+    port: 80,
+    password: "https://dsc.gg/ajidevserver",
+    secure: false
+  },
   {
     name: "Jirayu v4",
     host: "lavalink.jirayu.net",
@@ -37,24 +50,17 @@ const nodes = [
     secure: false
   },
   {
-    name: "Serenetia v4",
-    host: "lavalinkv4.serenetia.com",
-    port: 80,
-    password: "https://seretia.link/discord",
-    secure: false
+    name: "Ajieblogs v4",
+    host: "lava-v4.ajieblogs.eu.org",
+    port: 443,
+    password: "https://dsc.gg/ajidevserver",
+    secure: true
   },
   {
     name: "TriniumHost",
     host: "lavalink.triniumhost.com",
     port: 4333,
     password: "free",
-    secure: false
-  },
-  {
-    name: "G3V",
-    host: "lava.g3v.co.uk",
-    port: 9008,
-    password: "lavalinklol",
     secure: false
   }
 ];
