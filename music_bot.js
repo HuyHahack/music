@@ -176,31 +176,68 @@ const tempSearchTracks = new Map(); // Lưu tạm kết quả tìm kiếm (Key: 
 // Cookie YouTube được ưu tiên lấy từ biến YOUTUBE_COOKIES_BASE64 để không phải commit cookies.txt.
 const YOUTUBE_COOKIE_FILE = path.join(__dirname, '.youtube-cookies.txt');
 
+function logCookieFileStatus(cookiePath, sourceName) {
+  try {
+    const stat = fs.statSync(cookiePath);
+    const content = fs.readFileSync(cookiePath, 'utf8');
+    const nonCommentLines = content
+      .split(/\r?\n/)
+      .filter(line => line.trim() && !line.startsWith('#'));
+    const youtubeLines = nonCommentLines.filter(line => /(^|\.)youtube\.com\t/i.test(line));
+
+    console.log(`[MIX COOKIE] ✅ Nguồn: ${sourceName}`);
+    console.log(`[MIX COOKIE] 📁 File: ${cookiePath}`);
+    console.log(`[MIX COOKIE] 📦 Dung lượng: ${stat.size} bytes`);
+    console.log(`[MIX COOKIE] 🍪 Tổng dòng cookie: ${nonCommentLines.length}`);
+    console.log(`[MIX COOKIE] ▶️ Cookie YouTube: ${youtubeLines.length}`);
+  } catch (error) {
+    console.error('[MIX COOKIE] ❌ Không đọc được file cookie:', error.message);
+  }
+}
+
 function prepareYouTubeCookies() {
   try {
     const customPath = (process.env.YOUTUBE_COOKIES_PATH || '').trim();
-    if (customPath && fs.existsSync(customPath)) return customPath;
+    if (customPath) {
+      console.log(`[MIX COOKIE] YOUTUBE_COOKIES_PATH đã được đặt: ${customPath}`);
+      if (fs.existsSync(customPath)) {
+        logCookieFileStatus(customPath, 'YOUTUBE_COOKIES_PATH');
+        return customPath;
+      }
+      console.warn('[MIX COOKIE] ⚠️ Đường dẫn YOUTUBE_COOKIES_PATH không tồn tại.');
+    }
 
     const base64Cookies = (process.env.YOUTUBE_COOKIES_BASE64 || '').trim();
+    console.log(`[MIX COOKIE] YOUTUBE_COOKIES_BASE64: ${base64Cookies ? `đã nhận (${base64Cookies.length} ký tự)` : 'KHÔNG CÓ'}`);
     if (base64Cookies) {
-      const decoded = Buffer.from(base64Cookies, 'base64').toString('utf8');
+      const decodedBuffer = Buffer.from(base64Cookies, 'base64');
+      const decoded = decodedBuffer.toString('utf8');
+      console.log(`[MIX COOKIE] Base64 giải mã được: ${decodedBuffer.length} bytes`);
+
       if (!decoded.includes('Netscape HTTP Cookie File') && !decoded.includes('.youtube.com')) {
         throw new Error('YOUTUBE_COOKIES_BASE64 không phải cookies.txt hợp lệ.');
       }
+
       fs.writeFileSync(YOUTUBE_COOKIE_FILE, decoded, { mode: 0o600 });
-      console.log('[MIX] ✅ Đã tạo cookie YouTube từ YOUTUBE_COOKIES_BASE64.');
+      logCookieFileStatus(YOUTUBE_COOKIE_FILE, 'YOUTUBE_COOKIES_BASE64');
       return YOUTUBE_COOKIE_FILE;
     }
 
     const rawCookies = process.env.YOUTUBE_COOKIES;
+    console.log(`[MIX COOKIE] YOUTUBE_COOKIES dạng text: ${rawCookies && rawCookies.trim() ? 'đã nhận' : 'KHÔNG CÓ'}`);
     if (rawCookies && rawCookies.trim()) {
       fs.writeFileSync(YOUTUBE_COOKIE_FILE, rawCookies.replace(/\n/g, '\n'), { mode: 0o600 });
-      console.log('[MIX] ✅ Đã tạo cookie YouTube từ YOUTUBE_COOKIES.');
+      logCookieFileStatus(YOUTUBE_COOKIE_FILE, 'YOUTUBE_COOKIES');
       return YOUTUBE_COOKIE_FILE;
     }
 
     const localFile = path.join(__dirname, 'cookies.txt');
-    if (fs.existsSync(localFile)) return localFile;
+    if (fs.existsSync(localFile)) {
+      logCookieFileStatus(localFile, 'cookies.txt cục bộ');
+      return localFile;
+    }
+
+    console.warn('[MIX COOKIE] ⚠️ Không tìm thấy cookie nào. m!mix có thể bị YouTube chặn trên host.');
   } catch (error) {
     console.error('[MIX COOKIE ERROR]', error.message);
   }
