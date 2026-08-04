@@ -173,6 +173,41 @@ const tempSearchTracks = new Map(); // Lưu tạm kết quả tìm kiếm (Key: 
 
 // ============ HỆ THỐNG MIX NHIỀU BÀI PHÁT CÙNG LÚC ============
 // Trên Railway có thể tự nhận domain. Với host khác, thêm PUBLIC_URL=https://domain-cua-bot.com
+// Cookie YouTube được ưu tiên lấy từ biến YOUTUBE_COOKIES_BASE64 để không phải commit cookies.txt.
+const YOUTUBE_COOKIE_FILE = path.join(__dirname, '.youtube-cookies.txt');
+
+function prepareYouTubeCookies() {
+  try {
+    const customPath = (process.env.YOUTUBE_COOKIES_PATH || '').trim();
+    if (customPath && fs.existsSync(customPath)) return customPath;
+
+    const base64Cookies = (process.env.YOUTUBE_COOKIES_BASE64 || '').trim();
+    if (base64Cookies) {
+      const decoded = Buffer.from(base64Cookies, 'base64').toString('utf8');
+      if (!decoded.includes('Netscape HTTP Cookie File') && !decoded.includes('.youtube.com')) {
+        throw new Error('YOUTUBE_COOKIES_BASE64 không phải cookies.txt hợp lệ.');
+      }
+      fs.writeFileSync(YOUTUBE_COOKIE_FILE, decoded, { mode: 0o600 });
+      console.log('[MIX] ✅ Đã tạo cookie YouTube từ YOUTUBE_COOKIES_BASE64.');
+      return YOUTUBE_COOKIE_FILE;
+    }
+
+    const rawCookies = process.env.YOUTUBE_COOKIES;
+    if (rawCookies && rawCookies.trim()) {
+      fs.writeFileSync(YOUTUBE_COOKIE_FILE, rawCookies.replace(/\n/g, '\n'), { mode: 0o600 });
+      console.log('[MIX] ✅ Đã tạo cookie YouTube từ YOUTUBE_COOKIES.');
+      return YOUTUBE_COOKIE_FILE;
+    }
+
+    const localFile = path.join(__dirname, 'cookies.txt');
+    if (fs.existsSync(localFile)) return localFile;
+  } catch (error) {
+    console.error('[MIX COOKIE ERROR]', error.message);
+  }
+  return null;
+}
+
+const youtubeCookiePath = prepareYouTubeCookies();
 function getPublicBaseUrl() {
   const configured = (process.env.PUBLIC_URL || '').trim().replace(/\/$/, '');
   if (configured) return configured;
@@ -196,7 +231,7 @@ async function removeDirectorySafe(directory) {
   await fsp.rm(directory, { recursive: true, force: true }).catch(() => {});
 }
 
-// Tải 1 kết quả đầu tiên khi người dùng nhập tên bài; nếu nhập link thì tải link đó.
+// Tải đúng URL bài đã được người dùng chọn trong bảng tìm kiếm.
 async function downloadMixInput(query, workDir, index) {
   const outputTemplate = path.join(workDir, `input-${index}.%(ext)s`);
   const source = isHttpUrl(query) ? query : `ytsearch1:${query}`;
@@ -204,24 +239,47 @@ async function downloadMixInput(query, workDir, index) {
   const args = [
     '--no-playlist',
     '--no-warnings',
+    '--js-runtimes', 'node',
+    '--remote-components', 'ejs:github',
     '--restrict-filenames',
-    '-f', 'bestaudio/best',
+    '--retries', '3',
+    '--fragment-retries', '3',
+    '--extractor-retries', '3',
+    '--socket-timeout', '30',
+    '--sleep-requests', '1',
+    '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
+    '-f', 'bestaudio[ext=m4a]/bestaudio/best',
     '-o', outputTemplate,
-    '--print', 'after_move:filepath',
-    source
+    '--print', 'after_move:filepath'
   ];
 
-  const { stdout } = await execFileAsync('yt-dlp', args, {
-    maxBuffer: 20 * 1024 * 1024,
-    timeout: 180000
-  });
-
-  const downloadedPath = stdout.trim().split(/\r?\n/).filter(Boolean).pop();
-  if (!downloadedPath || !fs.existsSync(downloadedPath)) {
-    throw new Error(`Không tải được bài số ${index}.`);
+  if (youtubeCookiePath) {
+    args.push('--cookies', youtubeCookiePath);
   }
 
-  return downloadedPath;
+  args.push(source);
+
+  try {
+    const { stdout } = await execFileAsync('yt-dlp', args, {
+      maxBuffer: 30 * 1024 * 1024,
+      timeout: 240000
+    });
+
+    const downloadedPath = stdout.trim().split(/\r?\n/).filter(Boolean).pop();
+    if (!downloadedPath || !fs.existsSync(downloadedPath)) {
+      throw new Error(`Không tải được bài số ${index}.`);
+    }
+    return downloadedPath;
+  } catch (error) {
+    const detail = `${error.stderr || ''} ${error.stdout || ''} ${error.message || ''}`;
+    if (/confirm you.?re not a bot|sign in|cookies/i.test(detail)) {
+      throw new Error('YouTube chặn IP host hoặc cookie đã hết hạn. Hãy cập nhật YOUTUBE_COOKIES_BASE64 rồi restart bot.');
+    }
+    if (/signature solving failed|challenge solving failed|only images are available|javascript runtime|ejs/i.test(detail)) {
+      throw new Error('yt-dlp không giải được JavaScript của YouTube. Host cần Node.js và yt-dlp phiên bản mới; bot đã bật EJS solver tự động.');
+    }
+    throw new Error(`Không tải được bài ${index}: ${String(error.stderr || error.message || error).slice(0, 500)}`);
+  }
 }
 
 async function createMixedAudio(queries, guildId) {
@@ -232,10 +290,10 @@ async function createMixedAudio(queries, guildId) {
   await fsp.mkdir(workDir, { recursive: true });
 
   try {
-    const inputFiles = [];
-    for (let i = 0; i < queries.length; i++) {
-      inputFiles.push(await downloadMixInput(queries[i], workDir, i + 1));
-    }
+    // Tải song song các bài để tạo mix nhanh hơn.
+    const inputFiles = await Promise.all(
+      queries.map((query, index) => downloadMixInput(query, workDir, index + 1))
+    );
 
     const ffmpegArgs = ['-y'];
     for (const inputFile of inputFiles) ffmpegArgs.push('-i', inputFile);
@@ -552,20 +610,87 @@ client.on('messageCreate', async (message) => {
         return message.channel.send('🛑 Đã hủy tạo bản mix.');
       }
 
-      queries.push(answer);
-      await message.channel.send(`✅ Đã nhận bài **${index}/${amount}**: \`${answer.slice(0, 150)}\``);
+      // Nếu người dùng gửi link thì nhận thẳng. Nếu gửi tên bài, hiện 5 kết quả để chọn.
+      if (isHttpUrl(answer)) {
+        queries.push({ query: answer, title: answer });
+        await message.channel.send(`✅ Đã nhận link cho bài **${index}/${amount}**.`);
+      } else {
+        const searchResolve = await client.riffy.resolve({
+          query: answer,
+          requester: message.author
+        }).catch(() => null);
+
+        const searchTracks = searchResolve?.tracks?.slice(0, 5) || [];
+        if (searchTracks.length === 0) {
+          return message.channel.send(`❌ Không tìm thấy bài nào với từ khóa: \`${answer.slice(0, 150)}\`. Đã hủy bản mix.`);
+        }
+
+        const mixSelectId = `mix_select_${message.id}_${index}_${Date.now()}`;
+        const selectMenu = new StringSelectMenuBuilder()
+          .setCustomId(mixSelectId)
+          .setPlaceholder(`🎵 Chọn bài ${index}/${amount}...`)
+          .addOptions(searchTracks.map((track, trackIndex) =>
+            new StringSelectMenuOptionBuilder()
+              .setLabel(`${trackIndex + 1}. ${track.info.title.slice(0, 80)}`)
+              .setDescription(`${track.info.author.slice(0, 40)} | ${formatTime(track.info.length)}`)
+              .setValue(String(trackIndex))
+          ));
+
+        const searchEmbed = new EmbedBuilder()
+          .setColor(0x00BFFF)
+          .setTitle(`🔍 Kết quả cho bài ${index}/${amount}`)
+          .setDescription(searchTracks.map((track, trackIndex) =>
+            `**${trackIndex + 1}.** \`${track.info.title.slice(0, 100)}\` — *${track.info.author}*`
+          ).join('\n'))
+          .setFooter({ text: 'Chọn một bài trong menu bên dưới. Tự hủy sau 60 giây.' });
+
+        const selectMessage = await message.channel.send({
+          embeds: [searchEmbed],
+          components: [new ActionRowBuilder().addComponents(selectMenu)]
+        });
+
+        const selection = await selectMessage.awaitMessageComponent({
+          filter: interaction => interaction.user.id === message.author.id && interaction.customId === mixSelectId,
+          time: 60000
+        }).catch(() => null);
+
+        if (!selection) {
+          await selectMessage.edit({ components: [] }).catch(() => {});
+          return message.channel.send('⌛ Hết thời gian chọn bài. Đã hủy tạo bản mix.');
+        }
+
+        await selection.deferUpdate();
+        const chosenTrack = searchTracks[Number.parseInt(selection.values[0], 10)];
+        const chosenUrl = chosenTrack?.info?.uri;
+        if (!chosenTrack || !chosenUrl) {
+          await selectMessage.edit({ components: [] }).catch(() => {});
+          return message.channel.send('❌ Không lấy được link của bài đã chọn. Đã hủy bản mix.');
+        }
+
+        queries.push({
+          query: chosenUrl,
+          title: chosenTrack.info.title,
+          author: chosenTrack.info.author
+        });
+
+        const selectedEmbed = EmbedBuilder.from(searchEmbed)
+          .setColor(0x00FF00)
+          .setTitle(`✅ Đã chọn bài ${index}/${amount}`)
+          .setDescription(`**${chosenTrack.info.title}**\nTác giả: *${chosenTrack.info.author}*`);
+        await selectMessage.edit({ embeds: [selectedEmbed], components: [] }).catch(() => {});
+      }
     }
 
     const listEmbed = new EmbedBuilder()
       .setColor(0xF1C40F)
       .setTitle('🎚️ ĐANG XỬ LÝ BẢN MIX')
-      .setDescription(queries.map((q, i) => `**${i + 1}.** \`${q.slice(0, 180)}\``).join('\n'))
+      .setDescription(queries.map((item, i) => `**${i + 1}.** \`${item.title.slice(0, 180)}\``).join('\n'))
       .setFooter({ text: 'Đang tải từng bài và ghép bằng FFmpeg...' });
     const statusMessage = await message.channel.send({ embeds: [listEmbed] });
 
     let generatedOutputPath = null;
     try {
-      const mixed = await createMixedAudio(queries, message.guild.id);
+      const mixed = await createMixedAudio(queries.map(item => item.query), message.guild.id);
       generatedOutputPath = mixed.outputPath;
       const mixedUrl = `${publicBaseUrl}/mix/${encodeURIComponent(mixed.outputFileName)}`;
 
@@ -607,7 +732,7 @@ client.on('messageCreate', async (message) => {
       const doneEmbed = EmbedBuilder.from(listEmbed)
         .setColor(0x00FF00)
         .setTitle('✅ ĐÃ TẠO XONG BẢN MIX')
-        .setDescription(queries.map((q, i) => `**${i + 1}.** \`${q.slice(0, 180)}\``).join('\n'))
+        .setDescription(queries.map((item, i) => `**${i + 1}.** \`${item.title.slice(0, 180)}\``).join('\n'))
         .setFooter({ text: player.playing ? 'Bản mix đang phát hoặc đã được thêm vào hàng chờ.' : 'Đã thêm bản mix.' });
       await statusMessage.edit({ embeds: [doneEmbed] });
     } catch (error) {
@@ -617,7 +742,7 @@ client.on('messageCreate', async (message) => {
         .setColor(0xFF0000)
         .setTitle('❌ TẠO BẢN MIX THẤT BẠI')
         .setDescription(`Lỗi: \`${String(error.message || error).slice(0, 1500)}\``)
-        .setFooter({ text: 'Cần cài yt-dlp + FFmpeg và cấu hình PUBLIC_URL công khai.' });
+        .setFooter({ text: 'Cần yt-dlp mới + Node.js + FFmpeg + PUBLIC_URL và YOUTUBE_COOKIES_BASE64.' });
       await statusMessage.edit({ embeds: [errorEmbed] }).catch(() => {});
     }
     return;
