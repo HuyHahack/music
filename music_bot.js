@@ -269,13 +269,84 @@ async function removeDirectorySafe(directory) {
 }
 
 // Tải đúng URL bài đã được người dùng chọn trong bảng tìm kiếm.
+function mixLog(scope, message, extra) {
+  const stamp = new Date().toISOString();
+  if (extra === undefined) {
+    console.log(`[${stamp}] [${scope}] ${message}`);
+  } else {
+    console.log(`[${stamp}] [${scope}] ${message}`, extra);
+  }
+}
+
+function mixError(scope, message, extra) {
+  const stamp = new Date().toISOString();
+  if (extra === undefined) {
+    console.error(`[${stamp}] [${scope}] ${message}`);
+  } else {
+    console.error(`[${stamp}] [${scope}] ${message}`, extra);
+  }
+}
+
+function redactCommandArgs(args) {
+  const redacted = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--cookies') {
+      redacted.push('--cookies', '[COOKIE_FILE_HIDDEN]');
+      i++;
+      continue;
+    }
+    redacted.push(args[i]);
+  }
+  return redacted;
+}
+
+function safeStat(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    return { exists: true, size: stat.size, modified: stat.mtime.toISOString() };
+  } catch (error) {
+    return { exists: false, error: error.message };
+  }
+}
+
+async function logMixRuntimeInfo() {
+  mixLog('MIX DIAG', `Node.js: ${process.version}`);
+  mixLog('MIX DIAG', `Platform: ${process.platform} ${process.arch}`);
+  mixLog('MIX DIAG', `CWD: ${process.cwd()}`);
+  mixLog('MIX DIAG', `__dirname: ${__dirname}`);
+  mixLog('MIX DIAG', `PUBLIC_URL: ${getPublicBaseUrl() || 'KHÔNG CÓ'}`);
+  mixLog('MIX DIAG', `Cookie path: ${youtubeCookiePath ? '[ĐÃ CÓ]' : 'KHÔNG CÓ'}`);
+
+  for (const command of ['yt-dlp', 'ffmpeg']) {
+    try {
+      const versionArgs = command === 'ffmpeg' ? ['-version'] : ['--version'];
+      const { stdout, stderr } = await execFileAsync(command, versionArgs, { timeout: 15000, maxBuffer: 1024 * 1024 });
+      const firstLine = `${stdout || stderr || ''}`.split(/\r?\n/).find(Boolean) || 'không có output';
+      mixLog('MIX DIAG', `${command}: ${firstLine}`);
+    } catch (error) {
+      mixError('MIX DIAG', `${command} không chạy được`, {
+        message: error.message,
+        code: error.code,
+        signal: error.signal,
+        stderr: String(error.stderr || '').slice(0, 2000)
+      });
+    }
+  }
+}
+
+setTimeout(() => {
+  logMixRuntimeInfo().catch(error => mixError('MIX DIAG', 'Không kiểm tra được runtime', error.message));
+}, 1500);
+
 async function downloadMixInput(query, workDir, index) {
+  const startedAt = Date.now();
+  const scope = `MIX DOWNLOAD #${index}`;
   const outputTemplate = path.join(workDir, `input-${index}.%(ext)s`);
   const source = isHttpUrl(query) ? query : `ytsearch1:${query}`;
 
   const args = [
+    '--verbose',
     '--no-playlist',
-    '--no-warnings',
     '--js-runtimes', 'node',
     '--remote-components', 'ejs:github',
     '--restrict-filenames',
@@ -290,49 +361,103 @@ async function downloadMixInput(query, workDir, index) {
     '--print', 'after_move:filepath'
   ];
 
-  if (youtubeCookiePath) {
-    args.push('--cookies', youtubeCookiePath);
-  }
-
+  if (youtubeCookiePath) args.push('--cookies', youtubeCookiePath);
   args.push(source);
 
+  mixLog(scope, 'Bắt đầu tải');
+  mixLog(scope, `Query gốc: ${query}`);
+  mixLog(scope, `Nguồn yt-dlp: ${source}`);
+  mixLog(scope, `Thư mục làm việc: ${workDir}`);
+  mixLog(scope, `Output template: ${outputTemplate}`);
+  mixLog(scope, `Cookie: ${youtubeCookiePath ? 'CÓ' : 'KHÔNG'}`);
+  mixLog(scope, `Lệnh: yt-dlp ${redactCommandArgs(args).map(v => JSON.stringify(v)).join(' ')}`);
+
   try {
-    const { stdout } = await execFileAsync('yt-dlp', args, {
-      maxBuffer: 30 * 1024 * 1024,
-      timeout: 240000
+    const result = await execFileAsync('yt-dlp', args, {
+      maxBuffer: 50 * 1024 * 1024,
+      timeout: 300000,
+      env: { ...process.env, PYTHONUNBUFFERED: '1' }
     });
 
+    const stdout = String(result.stdout || '');
+    const stderr = String(result.stderr || '');
+    mixLog(scope, `Hoàn tất sau ${Date.now() - startedAt} ms`);
+    mixLog(scope, `STDOUT (${Buffer.byteLength(stdout)} bytes):\n${stdout || '[trống]'}`);
+    mixLog(scope, `STDERR (${Buffer.byteLength(stderr)} bytes):\n${stderr || '[trống]'}`);
+
     const downloadedPath = stdout.trim().split(/\r?\n/).filter(Boolean).pop();
+    mixLog(scope, `Đường dẫn yt-dlp trả về: ${downloadedPath || '[trống]'}`);
+
     if (!downloadedPath || !fs.existsSync(downloadedPath)) {
-      throw new Error(`Không tải được bài số ${index}.`);
+      mixError(scope, 'yt-dlp kết thúc nhưng file không tồn tại', {
+        downloadedPath,
+        workDirFiles: fs.existsSync(workDir) ? fs.readdirSync(workDir) : []
+      });
+      throw new Error(`Không tải được bài số ${index}: yt-dlp không tạo file.`);
     }
+
+    mixLog(scope, 'File đầu vào hợp lệ', safeStat(downloadedPath));
     return downloadedPath;
   } catch (error) {
-    const detail = `${error.stderr || ''} ${error.stdout || ''} ${error.message || ''}`;
-    if (/confirm you.?re not a bot|sign in|cookies/i.test(detail)) {
-      throw new Error('YouTube chặn IP host hoặc cookie đã hết hạn. Hãy cập nhật YOUTUBE_COOKIES_BASE64 rồi restart bot.');
+    const stdout = String(error.stdout || '');
+    const stderr = String(error.stderr || '');
+    const detail = `${stderr}\n${stdout}\n${error.message || ''}`;
+
+    mixError(scope, `THẤT BẠI sau ${Date.now() - startedAt} ms`);
+    mixError(scope, 'Thông tin tiến trình', {
+      message: error.message,
+      name: error.name,
+      code: error.code,
+      exitCode: error.exitCode,
+      killed: error.killed,
+      signal: error.signal,
+      cmd: error.cmd ? String(error.cmd).replace(youtubeCookiePath || '__NONE__', '[COOKIE_FILE_HIDDEN]') : undefined
+    });
+    mixError(scope, `STDOUT (${Buffer.byteLength(stdout)} bytes):\n${stdout || '[trống]'}`);
+    mixError(scope, `STDERR (${Buffer.byteLength(stderr)} bytes):\n${stderr || '[trống]'}`);
+    mixError(scope, 'File còn lại trong workDir', fs.existsSync(workDir) ? fs.readdirSync(workDir) : []);
+
+    if (/confirm you.?re not a bot|sign in to confirm|login required|cookies/i.test(detail)) {
+      throw new Error(`Bài ${index}: YouTube yêu cầu đăng nhập/xác minh hoặc cookie không được chấp nhận trên IP host. Xem [${scope}] STDERR.`);
     }
     if (/signature solving failed|challenge solving failed|only images are available|javascript runtime|ejs/i.test(detail)) {
-      throw new Error('yt-dlp không giải được JavaScript của YouTube. Host cần Node.js và yt-dlp phiên bản mới; bot đã bật EJS solver tự động.');
+      throw new Error(`Bài ${index}: yt-dlp không giải được JavaScript challenge. Xem [${scope}] STDERR.`);
     }
-    throw new Error(`Không tải được bài ${index}: ${String(error.stderr || error.message || error).slice(0, 500)}`);
+    if (/requested format is not available/i.test(detail)) {
+      throw new Error(`Bài ${index}: YouTube không trả định dạng âm thanh phù hợp. Xem [${scope}] STDERR.`);
+    }
+    if (/timed?\s*out|ETIMEDOUT|socket timeout/i.test(detail)) {
+      throw new Error(`Bài ${index}: kết nối YouTube bị timeout trên host. Xem [${scope}] STDERR.`);
+    }
+    throw new Error(`Không tải được bài ${index}: ${String(error.message || error).slice(0, 700)}`);
   }
 }
 
 async function createMixedAudio(queries, guildId) {
+  const startedAt = Date.now();
   const jobId = `${guildId}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+  const scope = `MIX JOB ${jobId}`;
   const workDir = path.join(MIX_OUTPUT_DIR, `.work-${jobId}`);
   const outputFileName = `mix-${jobId}.mp3`;
   const outputPath = path.join(MIX_OUTPUT_DIR, outputFileName);
   await fsp.mkdir(workDir, { recursive: true });
 
+  mixLog(scope, '========== BẮT ĐẦU MIX ==========');
+  mixLog(scope, `Guild: ${guildId}`);
+  mixLog(scope, `Số bài: ${queries.length}`);
+  mixLog(scope, 'Danh sách nguồn', queries.map((q, i) => ({ index: i + 1, query: q })));
+  mixLog(scope, `WorkDir: ${workDir}`);
+  mixLog(scope, `Output: ${outputPath}`);
+  mixLog(scope, `Public base URL: ${getPublicBaseUrl() || 'KHÔNG CÓ'}`);
+
   try {
-    // Tải song song các bài để tạo mix nhanh hơn.
     const inputFiles = await Promise.all(
       queries.map((query, index) => downloadMixInput(query, workDir, index + 1))
     );
 
-    const ffmpegArgs = ['-y'];
+    mixLog(scope, 'Tải đủ toàn bộ bài', inputFiles.map((file, i) => ({ index: i + 1, file, stat: safeStat(file) })));
+
+    const ffmpegArgs = ['-hide_banner', '-loglevel', 'info', '-y'];
     for (const inputFile of inputFiles) ffmpegArgs.push('-i', inputFile);
 
     const inputLabels = inputFiles.map((_, index) => `[${index}:a]`).join('');
@@ -347,22 +472,65 @@ async function createMixedAudio(queries, guildId) {
       outputPath
     );
 
-    await execFileAsync('ffmpeg', ffmpegArgs, {
-      maxBuffer: 20 * 1024 * 1024,
-      timeout: 300000
-    });
+    mixLog(scope, `FFmpeg filter: ${filter}`);
+    mixLog(scope, `FFmpeg command: ffmpeg ${ffmpegArgs.map(v => JSON.stringify(v)).join(' ')}`);
+    const ffmpegStarted = Date.now();
+
+    try {
+      const ffmpegResult = await execFileAsync('ffmpeg', ffmpegArgs, {
+        maxBuffer: 50 * 1024 * 1024,
+        timeout: 420000
+      });
+      mixLog(scope, `FFmpeg hoàn tất sau ${Date.now() - ffmpegStarted} ms`);
+      mixLog(scope, `FFmpeg STDOUT:\n${String(ffmpegResult.stdout || '[trống]')}`);
+      mixLog(scope, `FFmpeg STDERR:\n${String(ffmpegResult.stderr || '[trống]')}`);
+    } catch (error) {
+      mixError(scope, `FFmpeg THẤT BẠI sau ${Date.now() - ffmpegStarted} ms`, {
+        message: error.message,
+        code: error.code,
+        exitCode: error.exitCode,
+        killed: error.killed,
+        signal: error.signal
+      });
+      mixError(scope, `FFmpeg STDOUT:\n${String(error.stdout || '[trống]')}`);
+      mixError(scope, `FFmpeg STDERR:\n${String(error.stderr || '[trống]')}`);
+      throw error;
+    }
 
     if (!fs.existsSync(outputPath)) throw new Error('FFmpeg không tạo được file mix.');
+    mixLog(scope, 'File mix đã tạo', safeStat(outputPath));
 
-    // Giữ file đủ lâu để Lavalink phát xong; tự dọn sau 6 giờ.
     const cleanupTimer = setTimeout(() => {
-      fsp.unlink(outputPath).catch(() => {});
+      fsp.unlink(outputPath)
+        .then(() => mixLog(scope, `Đã tự xóa file mix sau 6 giờ: ${outputPath}`))
+        .catch(error => mixError(scope, `Không xóa được file mix: ${error.message}`));
     }, 6 * 60 * 60 * 1000);
-    cleanupTimer.unref?.();
+    if (typeof cleanupTimer.unref === 'function') cleanupTimer.unref();
 
-    return { outputFileName, outputPath };
+    const publicBaseUrl = getPublicBaseUrl();
+    if (!publicBaseUrl) {
+      throw new Error('Thiếu PUBLIC_URL. Hãy đặt PUBLIC_URL=https://domain-cong-khai-cua-bot');
+    }
+
+    const publicUrl = `${publicBaseUrl}/mix-files/${encodeURIComponent(outputFileName)}`;
+    mixLog(scope, `URL công khai: ${publicUrl}`);
+    mixLog(scope, `Tổng thời gian job: ${Date.now() - startedAt} ms`);
+    mixLog(scope, '========== MIX THÀNH CÔNG ==========');
+
+    return { outputPath, outputFileName, publicUrl, jobId };
+  } catch (error) {
+    mixError(scope, `========== MIX THẤT BẠI sau ${Date.now() - startedAt} ms ==========`);
+    mixError(scope, 'Lỗi cuối cùng', {
+      message: error.message,
+      name: error.name,
+      stack: error.stack
+    });
+    mixError(scope, 'Nội dung workDir lúc lỗi', fs.existsSync(workDir) ? fs.readdirSync(workDir).map(name => ({ name, stat: safeStat(path.join(workDir, name)) })) : []);
+    await fsp.unlink(outputPath).catch(() => {});
+    throw error;
   } finally {
     await removeDirectorySafe(workDir);
+    mixLog(scope, `Đã dọn workDir: ${workDir}`);
   }
 }
 
