@@ -1,7 +1,14 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 const { Riffy } = require('riffy');
 const express = require('express');
-const execAsync = require('util').promisify(require('child_process').exec);
+const { exec, execFile } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+const fs = require('fs');
+const fsp = require('fs/promises');
+const path = require('path');
+const crypto = require('crypto');
 require('dotenv/config');
 
 // ============ EXPRESS SERVER ============
@@ -10,6 +17,15 @@ app.use(express.json());
 app.get('/', (req, res) => res.json({ status: 'online' }));
 app.get('/health', (req, res) => res.status(200).send('OK'));
 const PORT = process.env.PORT || 3000;
+
+// Thư mục chứa các bản mix tạm thời để Lavalink có thể tải và phát.
+const MIX_OUTPUT_DIR = path.join(__dirname, 'mix-output');
+fs.mkdirSync(MIX_OUTPUT_DIR, { recursive: true });
+app.use('/mix', express.static(MIX_OUTPUT_DIR, {
+  fallthrough: false,
+  maxAge: '1h'
+}));
+
 app.listen(PORT, () => console.log(`🌐 Web server chạy tại cổng ${PORT}`));
 
 // ============ DISCORD BOT CLIENT ============
@@ -154,6 +170,106 @@ const globalCooldowns = new Map();
 // Khai báo đầy đủ các bộ nhớ đệm quản lý chống spam lệnh và tìm kiếm bài hát
 const playCooldowns = new Map(); // Giới hạn thời gian chờ riêng cho lệnh phát nhạc (10 giây)
 const tempSearchTracks = new Map(); // Lưu tạm kết quả tìm kiếm (Key: ID tin nhắn gửi đi - searchMsg.id)
+
+// ============ HỆ THỐNG MIX NHIỀU BÀI PHÁT CÙNG LÚC ============
+// Trên Railway có thể tự nhận domain. Với host khác, thêm PUBLIC_URL=https://domain-cua-bot.com
+function getPublicBaseUrl() {
+  const configured = (process.env.PUBLIC_URL || '').trim().replace(/\/$/, '');
+  if (configured) return configured;
+
+  const railwayDomain = (process.env.RAILWAY_PUBLIC_DOMAIN || '').trim();
+  if (railwayDomain) return `https://${railwayDomain}`;
+
+  return null;
+}
+
+function isHttpUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+async function removeDirectorySafe(directory) {
+  await fsp.rm(directory, { recursive: true, force: true }).catch(() => {});
+}
+
+// Tải 1 kết quả đầu tiên khi người dùng nhập tên bài; nếu nhập link thì tải link đó.
+async function downloadMixInput(query, workDir, index) {
+  const outputTemplate = path.join(workDir, `input-${index}.%(ext)s`);
+  const source = isHttpUrl(query) ? query : `ytsearch1:${query}`;
+
+  const args = [
+    '--no-playlist',
+    '--no-warnings',
+    '--restrict-filenames',
+    '-f', 'bestaudio/best',
+    '-o', outputTemplate,
+    '--print', 'after_move:filepath',
+    source
+  ];
+
+  const { stdout } = await execFileAsync('yt-dlp', args, {
+    maxBuffer: 20 * 1024 * 1024,
+    timeout: 180000
+  });
+
+  const downloadedPath = stdout.trim().split(/\r?\n/).filter(Boolean).pop();
+  if (!downloadedPath || !fs.existsSync(downloadedPath)) {
+    throw new Error(`Không tải được bài số ${index}.`);
+  }
+
+  return downloadedPath;
+}
+
+async function createMixedAudio(queries, guildId) {
+  const jobId = `${guildId}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+  const workDir = path.join(MIX_OUTPUT_DIR, `.work-${jobId}`);
+  const outputFileName = `mix-${jobId}.mp3`;
+  const outputPath = path.join(MIX_OUTPUT_DIR, outputFileName);
+  await fsp.mkdir(workDir, { recursive: true });
+
+  try {
+    const inputFiles = [];
+    for (let i = 0; i < queries.length; i++) {
+      inputFiles.push(await downloadMixInput(queries[i], workDir, i + 1));
+    }
+
+    const ffmpegArgs = ['-y'];
+    for (const inputFile of inputFiles) ffmpegArgs.push('-i', inputFile);
+
+    const inputLabels = inputFiles.map((_, index) => `[${index}:a]`).join('');
+    const filter = `${inputLabels}amix=inputs=${inputFiles.length}:duration=longest:dropout_transition=2:normalize=0,alimiter=limit=0.95[mixout]`;
+
+    ffmpegArgs.push(
+      '-filter_complex', filter,
+      '-map', '[mixout]',
+      '-vn',
+      '-c:a', 'libmp3lame',
+      '-b:a', '192k',
+      outputPath
+    );
+
+    await execFileAsync('ffmpeg', ffmpegArgs, {
+      maxBuffer: 20 * 1024 * 1024,
+      timeout: 300000
+    });
+
+    if (!fs.existsSync(outputPath)) throw new Error('FFmpeg không tạo được file mix.');
+
+    // Giữ file đủ lâu để Lavalink phát xong; tự dọn sau 6 giờ.
+    const cleanupTimer = setTimeout(() => {
+      fsp.unlink(outputPath).catch(() => {});
+    }, 6 * 60 * 60 * 1000);
+    cleanupTimer.unref?.();
+
+    return { outputFileName, outputPath };
+  } finally {
+    await removeDirectorySafe(workDir);
+  }
+}
 
 // Hàm hỗ trợ chuyển đổi mili-giây sang định dạng MM:SS
 function formatTime(ms) {
@@ -375,6 +491,137 @@ client.on('messageCreate', async (message) => {
   }
   globalCooldowns.set(userId, now);
   setTimeout(() => globalCooldowns.delete(userId), cooldownAmount);
+
+  // ============ LỆNH m!mix <số lượng> ============
+  // Ví dụ: m!mix 3 -> bot hỏi lần lượt 3 bài/link rồi phát cả 3 cùng lúc.
+  if (command === 'mix') {
+    const amount = Number.parseInt(args[0], 10);
+    if (!Number.isInteger(amount) || amount < 2 || amount > 5) {
+      return message.reply('❌ Dùng: `m!mix <số lượng>` với số lượng từ **2 đến 5**. Ví dụ: `m!mix 3`');
+    }
+
+    const voiceChannel = message.member.voice.channel;
+    if (!voiceChannel) return message.reply('❌ Bạn cần vào phòng voice trước!');
+
+    const permissions = voiceChannel.permissionsFor(client.user);
+    if (!permissions?.has('Connect') || !permissions?.has('Speak')) {
+      return message.reply('❌ Bot không có quyền Connect hoặc Speak trong phòng voice này!');
+    }
+
+    const publicBaseUrl = getPublicBaseUrl();
+    if (!publicBaseUrl) {
+      return message.reply('❌ Chưa có URL công khai để Lavalink lấy file mix. Hãy thêm biến môi trường `PUBLIC_URL=https://domain-cua-bot.com` rồi chạy lại bot.');
+    }
+
+    const setupEmbed = new EmbedBuilder()
+      .setColor(0x9B59B6)
+      .setTitle(`🎛️ TẠO BẢN MIX ${amount} BÀI`)
+      .setDescription([
+        `Mình sẽ hỏi lần lượt **${amount} bài**.`,
+        'Bạn có thể gửi **tên bài hát** hoặc **link YouTube/TikTok/Facebook/SoundCloud...**.',
+        '',
+        '📌 Gửi `hủy` bất cứ lúc nào để dừng.'
+      ].join('\n'))
+      .setFooter({ text: 'Mỗi bài có tối đa 60 giây để nhập.' })
+      .setTimestamp();
+
+    await message.reply({ embeds: [setupEmbed] });
+
+    const queries = [];
+    for (let index = 1; index <= amount; index++) {
+      const promptEmbed = new EmbedBuilder()
+        .setColor(0x3498DB)
+        .setTitle(`🔎 Bài ${index}/${amount}`)
+        .setDescription(`Hãy gửi **tên bài hát thứ ${index}** hoặc **link trực tiếp** để đưa vào bản mix.`)
+        .setFooter({ text: `Đã chọn ${queries.length}/${amount} bài` });
+
+      await message.channel.send({ embeds: [promptEmbed] });
+
+      const collected = await message.channel.awaitMessages({
+        filter: m => m.author.id === message.author.id && !m.author.bot,
+        max: 1,
+        time: 60000,
+        errors: ['time']
+      }).catch(() => null);
+
+      const answer = collected?.first()?.content?.trim();
+      if (!answer) {
+        return message.channel.send('⌛ Hết thời gian nhập. Đã hủy tạo bản mix.');
+      }
+      if (answer.toLowerCase() === 'hủy' || answer.toLowerCase() === 'huy' || answer.toLowerCase() === 'cancel') {
+        return message.channel.send('🛑 Đã hủy tạo bản mix.');
+      }
+
+      queries.push(answer);
+      await message.channel.send(`✅ Đã nhận bài **${index}/${amount}**: \`${answer.slice(0, 150)}\``);
+    }
+
+    const listEmbed = new EmbedBuilder()
+      .setColor(0xF1C40F)
+      .setTitle('🎚️ ĐANG XỬ LÝ BẢN MIX')
+      .setDescription(queries.map((q, i) => `**${i + 1}.** \`${q.slice(0, 180)}\``).join('\n'))
+      .setFooter({ text: 'Đang tải từng bài và ghép bằng FFmpeg...' });
+    const statusMessage = await message.channel.send({ embeds: [listEmbed] });
+
+    let generatedOutputPath = null;
+    try {
+      const mixed = await createMixedAudio(queries, message.guild.id);
+      generatedOutputPath = mixed.outputPath;
+      const mixedUrl = `${publicBaseUrl}/mix/${encodeURIComponent(mixed.outputFileName)}`;
+
+      let player = client.riffy.players.get(message.guild.id);
+      if (!player) {
+        player = client.riffy.createConnection({
+          guildId: message.guild.id,
+          voiceChannel: voiceChannel.id,
+          textChannel: message.channel.id,
+          deaf: true
+        });
+      }
+
+      player.requesterId = message.author.id;
+      const resolve = await client.riffy.resolve({
+        query: mixedUrl,
+        requester: message.author
+      });
+
+      if (!resolve?.tracks?.length) {
+        throw new Error('Lavalink không đọc được URL file mix. Kiểm tra PUBLIC_URL và firewall của host.');
+      }
+
+      const mixedTrack = resolve.tracks[0];
+      mixedTrack.info.requester = message.author;
+      mixedTrack.info.title = `Mix ${amount} bài của ${message.author.username}`;
+      player.queue.add(mixedTrack);
+
+      let attempts = 0;
+      while (!player.connected && attempts < 20) {
+        await new Promise(resolveDelay => setTimeout(resolveDelay, 500));
+        attempts++;
+      }
+
+      if (!player.connected) throw new Error('Không kết nối được phòng voice.');
+
+      if (!player.playing && !player.paused) await player.play();
+
+      const doneEmbed = EmbedBuilder.from(listEmbed)
+        .setColor(0x00FF00)
+        .setTitle('✅ ĐÃ TẠO XONG BẢN MIX')
+        .setDescription(queries.map((q, i) => `**${i + 1}.** \`${q.slice(0, 180)}\``).join('\n'))
+        .setFooter({ text: player.playing ? 'Bản mix đang phát hoặc đã được thêm vào hàng chờ.' : 'Đã thêm bản mix.' });
+      await statusMessage.edit({ embeds: [doneEmbed] });
+    } catch (error) {
+      console.error('[MIX ERROR]', error);
+      if (generatedOutputPath) await fsp.unlink(generatedOutputPath).catch(() => {});
+      const errorEmbed = EmbedBuilder.from(listEmbed)
+        .setColor(0xFF0000)
+        .setTitle('❌ TẠO BẢN MIX THẤT BẠI')
+        .setDescription(`Lỗi: \`${String(error.message || error).slice(0, 1500)}\``)
+        .setFooter({ text: 'Cần cài yt-dlp + FFmpeg và cấu hình PUBLIC_URL công khai.' });
+      await statusMessage.edit({ embeds: [errorEmbed] }).catch(() => {});
+    }
+    return;
+  }
 
   // ============ LỆNH m!p <Link hoặc Từ khóa> ============
   if (command === 'p' || command === 'play') {
