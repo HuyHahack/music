@@ -44,6 +44,14 @@ const PREFIX = 'm!';
 
 // ============ Cấu hình Lavalink Node ============
 const nodes = [
+  // Ưu tiên — từng PLAY SUCCESS / CONNECT
+  {
+    name: "Serenetia v4",
+    host: "lavalinkv4.serenetia.com",
+    port: 80,
+    password: "https://seretia.link/discord",
+    secure: false
+  },
   {
     name: "Millohost ID",
     host: "lava-v4.millohost.my.id",
@@ -57,13 +65,6 @@ const nodes = [
     port: 443,
     password: "https://seretia.link/discord",
     secure: true
-  },
-  {
-    name: "Serenetia v4",
-    host: "lavalinkv4.serenetia.com",
-    port: 80,
-    password: "https://seretia.link/discord",
-    secure: false
   },
   {
     name: "Kasawa TH",
@@ -91,13 +92,6 @@ const nodes = [
     host: "157.254.192.15",
     port: 2333,
     password: "youshallnotpass",
-    secure: false
-  },
-  {
-    name: "Trinium 4333",
-    host: "lavalink.triniumhost.com",
-    port: 4333,
-    password: "free",
     secure: false
   }
 ];
