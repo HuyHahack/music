@@ -44,27 +44,62 @@ const PREFIX = 'm!';
 
 // ============ Cấu hình Lavalink Node ============
 const nodes = [
-  // Gần VN / SEA
-  { name: "Kasawa TH", host: "lava2.kasawa.pro", port: 2334, password: "youshallnotpass", secure: false },
-  { name: "MineCuta", host: "lavav4.minecuta.com", port: 2333, password: "discord.gg/gKuXdHs", secure: false },
-  { name: "Millohost ID", host: "lava-v4.millohost.my.id", port: 443, password: "https://discord.gg/mjS5J2K3ep", secure: true },
-  { name: "NexCloud", host: "n3.nexcloud.in", port: 2026, password: "nexcloud", secure: false },
-
-  // Serenetia
-  { name: "Serenetia v4 SSL", host: "lavalinkv4.serenetia.com", port: 443, password: "https://seretia.link/discord", secure: true },
-  { name: "Serenetia v4", host: "lavalinkv4.serenetia.com", port: 80, password: "https://seretia.link/discord", secure: false },
-
-  // Khác
-  { name: "G3V UK", host: "lava.g3v.co.uk", port: 9008, password: "lavalinklol", secure: false },
-  { name: "Jirayu", host: "lavalink.jirayu.net", port: 13592, password: "youshallnotpass", secure: false },
-  { name: "Jirayu SSL", host: "lavalink.jirayu.net", port: 443, password: "youshallnotpass", secure: true },
-  { name: "East112", host: "157.254.192.15", port: 2333, password: "youshallnotpass", secure: false },
-  { name: "VexaNode", host: "omega.vexanode.cloud", port: 2031, password: "https://discord.vexanode.cloud", secure: false },
-  { name: "Trinium 4333", host: "lavalink.triniumhost.com", port: 4333, password: "free", secure: false },
-  { name: "Trinium SSL", host: "lavalink-v4.triniumhost.com", port: 443, password: "free", secure: true },
-  { name: "Muzykant v4", host: "lavalink_v4.muzykant.xyz", port: 443, password: "https://discord.gg/v6sdrD9kPh", secure: true },
-  { name: "Oreshi", host: "proxy.oreshi.com", port: 2333, password: "https://discord.gg/RPCfvBSUuM", secure: false },
-  { name: "Techbyte", host: "lavahatry4.techbyte.host", port: 3000, password: "NAIGLAVA-dash.techbyte.host", secure: false },
+  {
+    name: "Millohost ID",
+    host: "lava-v4.millohost.my.id",
+    port: 443,
+    password: "https://discord.gg/mjS5J2K3ep",
+    secure: true
+  },
+  {
+    name: "Serenetia v4 SSL",
+    host: "lavalinkv4.serenetia.com",
+    port: 443,
+    password: "https://seretia.link/discord",
+    secure: true
+  },
+  {
+    name: "Serenetia v4",
+    host: "lavalinkv4.serenetia.com",
+    port: 80,
+    password: "https://seretia.link/discord",
+    secure: false
+  },
+  {
+    name: "Kasawa TH",
+    host: "lava2.kasawa.pro",
+    port: 2334,
+    password: "youshallnotpass",
+    secure: false
+  },
+  {
+    name: "MineCuta",
+    host: "lavav4.minecuta.com",
+    port: 2333,
+    password: "discord.gg/gKuXdHs",
+    secure: false
+  },
+  {
+    name: "G3V UK",
+    host: "lava.g3v.co.uk",
+    port: 9008,
+    password: "lavalinklol",
+    secure: false
+  },
+  {
+    name: "East112",
+    host: "157.254.192.15",
+    port: 2333,
+    password: "youshallnotpass",
+    secure: false
+  },
+  {
+    name: "Trinium 4333",
+    host: "lavalink.triniumhost.com",
+    port: 4333,
+    password: "free",
+    secure: false
+  }
 ];
 client.riffy = new Riffy(client, nodes, {
   send: (payload) => {
