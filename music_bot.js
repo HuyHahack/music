@@ -44,7 +44,7 @@ const PREFIX = 'm!';
 
 // ============ Cấu hình Lavalink Node ============
 const nodes = [
-  // Ưu tiên — từng PLAY SUCCESS / CONNECT
+  // Ưu tiên (từng CONNECT / PLAY SUCCESS)
   {
     name: "Serenetia v4",
     host: "lavalinkv4.serenetia.com",
@@ -92,6 +92,34 @@ const nodes = [
     host: "157.254.192.15",
     port: 2333,
     password: "youshallnotpass",
+    secure: false
+  },
+  {
+    name: "NYX SG1",
+    host: "sg1-nodelink.nyxbot.app",
+    port: 3000,
+    password: "nyxbot.app/support",
+    secure: false
+  },
+  {
+    name: "NYX SG2",
+    host: "sg2-nodelink.nyxbot.app",
+    port: 3000,
+    password: "nyxbot.app/support",
+    secure: false
+  },
+  {
+    name: "Trinium 4333",
+    host: "lavalink.triniumhost.com",
+    port: 4333,
+    password: "free",
+    secure: false
+  },
+  {
+    name: "Trinium 2333",
+    host: "lavalink.triniumhost.com",
+    port: 2333,
+    password: "kirito",
     secure: false
   }
 ];
